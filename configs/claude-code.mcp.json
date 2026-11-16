@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "perplexity-web": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "G:/perplexity-web-orchestrator/dist/index.js"
+      ],
+      "env": {
+        "PERPLEXITY_HEADLESS": "false"
+      }
+    }
+  }
+}

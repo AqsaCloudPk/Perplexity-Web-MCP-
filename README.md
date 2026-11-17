@@ -30,20 +30,28 @@ npx -y @aqsacloud/perplexity-web-mcp setup --client cursor
 npx -y @aqsacloud/perplexity-web-mcp setup --client antigravity
 ```
 
-The setup command automatically installs Playwright Chromium, merges the MCP server configuration into your client's config file (creating a timestamped backup first), and installs the `perplexity-orchestrator` skill.
+The setup command automatically installs Playwright Chromium, merges the MCP server configuration into your client's config file (creating a timestamped backup first), installs the `perplexity-orchestrator` skill, gives the client its own browser profile (`<data root>/profiles/<client>`), and prints the exact login command for that profile.
 
 ### Sign In Once
 
+Run the login command for the client you configured (`setup` prints this exact line, including `--client`):
+
 ```bash
-npx -y @aqsacloud/perplexity-web-mcp login
+npx -y @aqsacloud/perplexity-web-mcp login --client opencode
 ```
 
-A dedicated automation browser window titled **`>>> SIGN IN HERE <<< Perplexity`** will open. Sign into your Perplexity account (Free or Pro). Your session cookies are stored securely on your local machine (`~/.perplexity-web-mcp/.playwright/profile`) and reused across restarts.
+A dedicated automation browser window titled **`>>> SIGN IN HERE <<< Perplexity`** will open. Sign into your Perplexity account (Free or Pro) **in that window**. Session cookies are stored locally in that client's profile:
+
+- **npm / npx install:** `~/.perplexity-web-mcp/profiles/<client>/`
+- **git clone:** `<repo>/profiles/<client>/` (git-ignored)
+- **manual config without `--client`:** the shared default profile, `<data root>/.playwright/profile`
+
+Treat the profile folder like a password: it holds your Perplexity session cookies. Never commit or share it. Repeat the login command once per client you configured.
 
 Verify your installation at any time:
 
 ```bash
-npx -y @aqsacloud/perplexity-web-mcp doctor --online
+npx -y @aqsacloud/perplexity-web-mcp doctor --online --client opencode
 ```
 
 > **Windows PowerShell Note:** If `npx` or `npm` fails with `PSSecurityException (running scripts is disabled)`, use `npx.cmd` / `npm.cmd` instead.
@@ -54,10 +62,10 @@ npx -y @aqsacloud/perplexity-web-mcp doctor --online
 
 1. **`search`**: Query Perplexity with claim-level `[1]`, `[2]` citation provenance, optional live citation verification (`verify_claims: true`), TTL caching, and automatic long-output disk spooling (`>= 15,000` chars).
 2. **`search_advanced`**: Filter sources across `web`, `academic`, or `social`.
-3. **`compare_models`**: Query 2–5 frontier models sequentially (or concurrently when multiple `PERPLEXITY_PROFILE_DIRS` browser profile pools or parallel API calls are configured), returning agreed facts, divergent specifics, and shared citations.
+3. **`compare_models`**: Query 2–5 frontier models sequentially by default (concurrently when multiple `PERPLEXITY_PROFILE_DIRS` profile slots or `backend: "api"` are configured), returning agreed facts, divergent specifics, and shared citations.
 4. **`list_models`**: Discover currently available frontier models on your Perplexity tier.
 5. **`set_default_model`**: Set a sticky default model (e.g. `GPT-6.1 Sol`, `Claude Sonnet 5.5`, `Best`).
-6. **`health_check`**: Verify browser launch, Cloudflare status, composer input, and write permissions in ~2 seconds (auto-capturing failure snapshots under `~/.perplexity-web-mcp/diagnostics/` if unhealthy).
+6. **`health_check`**: Verify browser launch, Cloudflare status, composer input, and write permissions in ~5 seconds. Failure snapshots are written under the server's data directory (`~/.perplexity-web-mcp/diagnostics/` for npx installs; `<repo>/diagnostics/` for clones).
 7. **`login`**: Verify or trigger interactive authentication for a browser profile.
 
 ---
@@ -79,7 +87,7 @@ In `~/.config/opencode/opencode.json` (global) or `./opencode.json` (workspace):
         "command": [
           "npx",
           "-y",
-          "@aqsacloud/perplexity-web-mcp@^1.5"
+          "@aqsacloud/perplexity-web-mcp@1.5.2"
         ],
         "environment": {},
         "timeout": {
@@ -96,7 +104,7 @@ In `~/.config/opencode/opencode.json` (global) or `./opencode.json` (workspace):
 Add with the Claude CLI:
 
 ```bash
-claude mcp add perplexity-web -- npx -y @aqsacloud/perplexity-web-mcp@^1.5
+claude mcp add perplexity-web -- npx -y @aqsacloud/perplexity-web-mcp@1.5.2
 ```
 
 Or in your project's `.mcp.json`:
@@ -107,7 +115,7 @@ Or in your project's `.mcp.json`:
     "perplexity-web": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@aqsacloud/perplexity-web-mcp@^1.5"],
+      "args": ["-y", "@aqsacloud/perplexity-web-mcp@1.5.2"],
       "env": {}
     }
   }
@@ -123,7 +131,7 @@ In `~/.cursor/mcp.json` or `.cursor/mcp.json`:
     "perplexity-web": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@aqsacloud/perplexity-web-mcp@^1.5"],
+      "args": ["-y", "@aqsacloud/perplexity-web-mcp@1.5.2"],
       "env": {}
     }
   }
@@ -138,7 +146,7 @@ In `~/.gemini/config/mcp_config.json`:
   "mcpServers": {
     "perplexity-web": {
       "command": "cmd.exe",
-      "args": ["/c", "npx", "-y", "@aqsacloud/perplexity-web-mcp@^1.5"],
+      "args": ["/c", "npx", "-y", "@aqsacloud/perplexity-web-mcp@1.5.2"],
       "env": {}
     }
   }
@@ -147,11 +155,15 @@ In `~/.gemini/config/mcp_config.json`:
 
 ### Other Clients (Codex, Gemini CLI, VS Code, Windsurf, Cline, Zed, Continue)
 
-Print a generic JSON snippet for any MCP-compatible client:
+Print a paste-ready stdio snippet (add `--client <name>` to include that client's isolated profile):
 
 ```bash
-npx -y @aqsacloud/perplexity-web-mcp setup --print
+npx -y @aqsacloud/perplexity-web-mcp setup --print --client cursor
 ```
+
+The output is wrapped in `mcpServers` for Claude/Cursor-style clients. Other clients use different shapes: OpenCode V2 uses `mcp.servers` with a `command` array and `environment`, and Zed uses `context_servers` with a nested `command` object. Use `setup --client opencode` to write OpenCode directly, or paste the inner server entry into your client's existing shape. Without `--client`, the snippet uses the shared default profile.
+
+Client configs in this repository pin the exact version (`@1.5.2`) instead of a caret range. A caret is stripped by `cmd.exe` on Windows, which silently changes the resolved version; update the pin deliberately when you upgrade.
 
 ---
 
@@ -170,16 +182,21 @@ For details, see [SECURITY.md](SECURITY.md).
 ## ❓ Troubleshooting & FAQ
 
 ### "I signed into my personal Chrome/Edge, but the tool still says unauthenticated"
-Perplexity sessions in your everyday Chrome or Edge are **not** shared with the MCP server. Playwright runs in an isolated automation browser profile (`~/.perplexity-web-mcp/.playwright/profile`) so it doesn't interfere with your personal browsing.
+Perplexity sessions in your everyday Chrome or Edge are **not** shared with the MCP server. Playwright runs in an isolated automation profile so it doesn't interfere with your personal browsing.
 
-You must run the login command:
+Sign in to the profile your client actually uses:
+
 ```bash
-npx -y @aqsacloud/perplexity-web-mcp login
+# The same --client you passed to setup
+npx -y @aqsacloud/perplexity-web-mcp login --client opencode
 ```
-and sign into the window that opens with the title **`>>> SIGN IN HERE <<< Perplexity`**.
+
+and sign into the window titled **`>>> SIGN IN HERE <<< Perplexity`**. If you configured the client manually without `--client`, run `login` with no flag (shared default profile) or pass `--profile <name-or-path>`.
 
 ### "Why does a browser window open during searches?"
-Perplexity uses Cloudflare Turnstile bot detection which blocks headless Chromium instances. To ensure searches never get blocked, the server launches a visible Chromium window off-screen or minimized.
+By default searches run **headless** (`PERPLEXITY_HEADLESS` defaults to `true`). The `login` command always opens a visible window so you can complete sign-in and any Cloudflare challenge.
+
+If a headless session is challenged by Cloudflare Turnstile, set `PERPLEXITY_HEADLESS=false` in the server environment and restart the client. Visible mode launches Chromium off-screen or minimized, which lets the challenge complete without interrupting your desktop.
 
 ### "How do I use the official API instead of browser automation?"
 Set your official Perplexity API key:
@@ -189,7 +206,9 @@ export PERPLEXITY_API_KEY="pplx-xxxxxxxxxxxxxxxx"
 The server will automatically route queries to the official Perplexity Agent API (`/v1/agent`), providing sub-second latency with zero UI automation or Cloudflare involvement.
 
 ### "Can I run OpenCode + Cursor + Claude Code at the same time?"
-When you use `setup --client <name>`, each client gets its own isolated browser profile directory (`~/.perplexity-web-mcp/profiles/<client>/`), so multiple clients can run simultaneously without Chromium lock conflicts. If you configured manually, set `PERPLEXITY_PROFILE_DIR` to a unique path per client.
+When you use `setup --client <name>`, each client gets its own isolated browser profile directory (`~/.perplexity-web-mcp/profiles/<client>/` for npm/npx installs, `<repo>/profiles/<client>/` for clones), so multiple clients can run simultaneously without Chromium lock conflicts. If you configured manually, set `PERPLEXITY_PROFILE_DIR` to a unique path per client.
+
+If another process is already using a profile, the server returns a typed `PROFILE_UNAVAILABLE` error instead of deleting its lock files or killing the browser. Close the other client/browser, or set `PERPLEXITY_FORCE_CLEANUP=1` to explicitly terminate the process holding that profile.
 
 ---
 
@@ -197,8 +216,8 @@ When you use `setup --client <name>`, each client gets its own isolated browser 
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `PERPLEXITY_DATA_DIR` | `~/.perplexity-web-mcp` | Directory for browser profiles, cache, and outputs when installed via npm/npx. |
-| `PERPLEXITY_PROFILE_DIR` | `~/.perplexity-web-mcp/.playwright/profile` | Browser profile directory. Setup generates a per-client path automatically. |
+| `PERPLEXITY_DATA_DIR` | `~/.perplexity-web-mcp` (npm/npx) or repo root (clone) | Directory for browser profiles, cache, and outputs. |
+| `PERPLEXITY_PROFILE_DIR` | `<data root>/.playwright/profile` | Browser profile directory. Setup generates a per-client path automatically. |
 | `PERPLEXITY_PROFILE_DIRS` | *(unset)* | Semicolon/comma-separated list of profile directories for concurrent browser pool slots. |
 | `PERPLEXITY_API_KEY` | *(unset)* | Enables official Perplexity REST API backend (`/v1/agent`). |
 | `PERPLEXITY_BACKEND` | `"auto"` | Execution backend (`"auto"`, `"browser"`, or `"api"`). |
@@ -208,7 +227,7 @@ When you use `setup --client <name>`, each client gets its own isolated browser 
 | `PERPLEXITY_LOGIN_TIMEOUT_MS` | `900000` (15m) | Maximum wait time for interactive login. |
 | `PERPLEXITY_CACHE_TTL_SECONDS` | `3600` (1h) | TTL for repeated query caching (`0` disables). |
 | `PERPLEXITY_VERIFY_CLAIMS` | `"0"` | Set to `"1"` to enable claim verification by default. |
-| `PERPLEXITY_FORCE_CLEANUP` | `"0"` | Set to `"1"` to allow the server to kill orphaned Chrome processes that hold a profile lock. Without this, it only removes lock files. |
+| `PERPLEXITY_FORCE_CLEANUP` | `"0"` | Set to `"1"` to terminate a live Chromium process holding the profile lock. Without it, a live owner returns `PROFILE_UNAVAILABLE`; stale locks are removed only when no owner exists. |
 
 ---
 

@@ -14,8 +14,14 @@ Use this skill when working in any coding agent (**Claude Code**, **Cursor**, **
 - `search({ query, model?, thread_url?, timeout_seconds?, output_file?, profile?, backend?, verify_claims?, no_cache? })` — Run a Perplexity search/reasoning query (or continue a virtualized long thread via `thread_url`) with claim-level `[1]`, `[2]` citation provenance, optional live source verification (`verify_claims: true` labels each claim `supported` / `weak` / `unverified`), MCP progress notifications, cancellation-safe partial `.txt` checkpoints, typed error JSON (`LOGIN_REQUIRED`, `CLOUDFLARE_CHALLENGE`, `SELECTOR_MISSING`, `MODEL_UNAVAILABLE`, `CANCELLED`, `TIMEOUT`, `API_ERROR`), TTL caching (`PERPLEXITY_CACHE_TTL_SECONDS`, bypass with `no_cache: true`), optional `profile` concurrency routing (`PERPLEXITY_PROFILE_DIRS`), and optional `backend` (`"auto"`, `"browser"`, or `"api"` with `PERPLEXITY_API_KEY`). Default timeout is `900s` (15 minutes, max `1800s`). Responses `>= 15000` chars (or any response with `output_file`) automatically save to a UTF-8 `.txt` file including Claim Provenance and return the path + preview + `Metadata` JSON.
 - `search_advanced({ query, sources, model?, thread_url?, timeout_seconds?, output_file?, profile?, backend?, verify_claims?, no_cache? })` — Run a search scoped to specific Perplexity sources (`web`, `academic`, `social`) with the same timeouts, provenance & verification options, cache controls, progress/cancellation safety, `.txt` handling, profile routing, and hybrid backend support.
 - `compare_models({ query, models?, sources?, timeout_seconds?, output_file?, backend?, verify_claims?, no_cache? })` — Fan out one prompt across `2–5` models (sequential with a single browser profile; concurrent across `PERPLEXITY_PROFILE_DIRS` browser pool slots or parallel API requests) and return consensus facts, single-model specifics, shared citations, and per-model answers.
-- `health_check({ profile? })` — Verify Perplexity browser launch, login session, Cloudflare clear state, composer input, `+`/sources trigger, hydrated model selector, and local dirs, auto-saving `.html`/`.png`/`.json` failure snapshots under `~/.perplexity-web-mcp/diagnostics/` when unhealthy.
-- `login({ profile? })` — Open the browser session interactively for the default or specified profile so the user can authenticate with Perplexity if a query reports `LOGIN_REQUIRED` or `CLOUDFLARE_CHALLENGE`.
+- `health_check({ profile? })` — Verify Perplexity browser launch, login session, Cloudflare clear state, composer input, `+`/sources trigger, hydrated model selector, and local dirs, auto-saving `.html`/`.png`/`.json` failure snapshots under the server's diagnostics directory (`~/.perplexity-web-mcp/diagnostics/` for npx installs; `<repo>/diagnostics/` for clones) when unhealthy.
+- `login({ profile? })` — Open the browser session interactively for the default or specified profile so the user can authenticate with Perplexity if a query reports `LOGIN_REQUIRED` or `CLOUDFLARE_CHALLENGE`. From a shell, `perplexity-web-mcp login --client <client>` targets the exact profile that `setup --client` configured.
+
+## MCP Prompts
+
+- `research({ query })` — Search with citations and summarize.
+- `regression_research({ query })` — Triage a software regression: cited release notes/issues, version and date verification, ranked hypotheses, and a local verification plan.
+- `compare_models({ query })` — Compare multiple Perplexity models for consensus vs model-specific claims.
 
 ## Orchestration Workflow
 
@@ -37,4 +43,4 @@ Use this skill when working in any coding agent (**Claude Code**, **Cursor**, **
    - **Verify locally**: Never adopt generated code blindly. Implement or prototype locally and run syntax checks, unit tests, type checks, or benchmarks in the workspace before finalizing.
 
 5. **Authentication & Health Handling**
-   - Run `health_check` if Perplexity selectors fail or behavior looks degraded (auto-saves `.html`/`.png`/`.json` snapshots under `./diagnostics/`). If a tool call reports `LOGIN_REQUIRED` or `CLOUDFLARE_CHALLENGE`, call `login` and ask the user to sign in once in the browser window.
+   - Run `health_check` if Perplexity selectors fail or behavior looks degraded (auto-saves `.html`/`.png`/`.json` snapshots under the server's diagnostics directory). If a tool call reports `LOGIN_REQUIRED` or `CLOUDFLARE_CHALLENGE`, call `login` and ask the user to sign in once in the browser window.

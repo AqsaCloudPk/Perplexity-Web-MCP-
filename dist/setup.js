@@ -66,13 +66,18 @@ export function resolveMode(opts = {}) {
     return isInstalledPackage() ? "npx" : "node";
 }
 
+/** Directory where `setup --client <c>` stores that client's isolated browser profile. */
+export function profileDirForClient(client, env = process.env) {
+    return path.join(resolveDataRoot(env), "profiles", client);
+}
+
 export function buildServerSpec({ mode, platform = process.platform, absoluteNode = false, entry = path.join(packageDir(), "dist", "index.js"), client = null } = {}) {
     const env = {};
     if (client) {
-        const dataRoot = resolveDataRoot();
-        env.PERPLEXITY_PROFILE_DIR = path.join(dataRoot, "profiles", client);
+        env.PERPLEXITY_PROFILE_DIR = profileDirForClient(client);
     }
-    const versionPin = `@^${PKG.version.split(".").slice(0, 2).join(".")}`;
+    // Exact pin: reproducible, and `^` is stripped by cmd.exe on Windows (turning "@^1.5" into "@1.5").
+    const versionPin = `@${PKG.version}`;
     if (mode === "npx") {
         return platform === "win32"
             ? { command: "cmd.exe", args: ["/c", "npx", "-y", `${PKG.name}${versionPin}`], env }
@@ -275,11 +280,50 @@ async function ensureChromium(dryRun) {
     return true;
 }
 
-export function loginCommandHint(mode) {
+function commandHint(mode, subcommand, client = null) {
+    const suffix = client ? ` --client ${client}` : "";
     if (mode === "npx") {
-        return `${process.platform === "win32" ? "npx.cmd" : "npx"} -y ${PKG.name} login`;
+        return `${process.platform === "win32" ? "npx.cmd" : "npx"} -y ${PKG.name} ${subcommand}${suffix}`;
     }
-    return `node "${path.join(packageDir(), "dist", "cli.js")}" login`;
+    return `node "${path.join(packageDir(), "dist", "cli.js")}" ${subcommand}${suffix}`;
+}
+
+/** Command users should run to sign in to the profile that `setup --client <c>` configured. */
+export function loginCommandHint(mode, client = null) {
+    return commandHint(mode, "login", client);
+}
+
+/** Matching doctor command for the same client profile. */
+export function doctorCommandHint(mode, client = null) {
+    return commandHint(mode, "doctor --online", client);
+}
+
+/** Quote a shell argument only when needed (used for human-readable Claude CLI hints). */
+function shellArg(value) {
+    return /\s/.test(value) ? `"${value}"` : value;
+}
+
+/** The exact `claude mcp add` command for a user-level (global) Claude Code install. */
+export function claudeAddCommand(spec) {
+    const parts = ["claude", "mcp", "add", "--scope", "user", SERVER_NAME];
+    for (const [key, value] of Object.entries(spec?.env ?? {})) {
+        parts.push("--env", `"${key}=${value}"`);
+    }
+    parts.push("--", ...[spec.command, ...spec.args].map(shellArg));
+    return parts.join(" ");
+}
+
+/** Parse `--client` for login/doctor; returns null when omitted, false when invalid. */
+export function parseClientOption(raw) {
+    if (raw === undefined || raw === null || String(raw).trim() === "") {
+        return null;
+    }
+    const client = String(raw).trim().toLowerCase();
+    if (!CLIENTS.includes(client)) {
+        bad(`Unknown client: ${client}. Choose from: ${CLIENTS.join(", ")}`);
+        return false;
+    }
+    return client;
 }
 
 export function printSetupHelp() {
@@ -288,8 +332,9 @@ export function printSetupHelp() {
 Usage:
   perplexity-web-mcp                       Start the MCP server on stdio (what MCP clients run)
   perplexity-web-mcp setup --client <c>    Configure an MCP client (${CLIENTS.join(" | ")}; comma-separate for several)
-  perplexity-web-mcp login [--profile p]   Open the automation browser and sign in to Perplexity once
-  perplexity-web-mcp doctor [--online]     Diagnose installation, browser, profile and (with --online) the live session
+  perplexity-web-mcp login [--client c]    Sign in to the profile configured for a client (or the default profile)
+  perplexity-web-mcp doctor [--client c] [--online]
+                                           Diagnose installation, browser, client profile, and (with --online) the live session
 
 setup options:
   --project          Write the project-level config in the current directory instead of the user-level one
@@ -300,7 +345,7 @@ setup options:
   --force            Overwrite an existing, different copy of the skill
   --skip-deps        Skip 'npm install --omit=dev' (clone installs only)
   --skip-browser     Skip downloading Playwright Chromium
-  --print            Print a generic MCP server JSON snippet to stdout without writing any files
+  --print            Print a paste-ready mcpServers JSON snippet without writing any files (add --client <c> to include that client's profile)
 
 Windows PowerShell: if 'npx' is blocked by the execution policy (npx.ps1), use 'npx.cmd' or cmd.exe.`);
 }
@@ -311,20 +356,36 @@ async function runSetup(opts) {
         return opts.help ? 0 : 2;
     }
 
-    // --print mode: output a generic JSON snippet to stdout and exit
+    // --print mode: emit a paste-ready stdio snippet and exit without writing files.
     if (opts.print) {
+        let client = null;
+        if (opts.client !== undefined) {
+            const requested = String(opts.client).split(",").map((c) => c.trim()).filter(Boolean);
+            if (requested.length !== 1) {
+                bad("--print supports exactly one --client.");
+                return 2;
+            }
+            client = parseClientOption(requested[0]);
+            if (client === false)
+                return 2;
+        }
         const mode = resolveMode(opts);
-        const spec = buildServerSpec({ mode, absoluteNode: Boolean(opts["absolute-node"]) });
+        const spec = buildServerSpec({ mode, absoluteNode: Boolean(opts["absolute-node"]), client });
         const snippet = {
+            type: "stdio",
             command: spec.command,
             args: spec.args,
             env: spec.env,
         };
-        out(JSON.stringify({ "perplexity-web": snippet }, null, 2));
+        out(JSON.stringify({ mcpServers: { [SERVER_NAME]: snippet } }, null, 2));
         return 0;
     }
 
     const clients = String(opts.client).split(",").map((c) => c.trim().toLowerCase()).filter(Boolean);
+    if (clients.length === 0) {
+        bad(`No client specified. Choose from: ${CLIENTS.join(", ")}`);
+        return 2;
+    }
     const unknown = clients.filter((c) => !CLIENTS.includes(c));
     if (unknown.length > 0) {
         bad(`Unknown client: ${unknown.join(", ")}. Choose from: ${CLIENTS.join(", ")}`);
@@ -349,9 +410,8 @@ async function runSetup(opts) {
         out();
         out(`== ${target.label} ==`);
         if (target.configPath === null) {
-            const claudeArgs = [spec.command, ...spec.args].map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" ");
             info(`Claude Code keeps user-level servers in ~/.claude.json, which this tool does not edit. Run:`);
-            out(`       claude mcp add --scope user ${SERVER_NAME} -- ${claudeArgs}`);
+            out(`       ${claudeAddCommand(spec)}`);
             info("Or re-run with --project to write ./.mcp.json.");
         }
         else {
@@ -398,15 +458,38 @@ async function runSetup(opts) {
         return 1;
     }
     out("Next steps:");
-    out(`  1. Sign in to Perplexity once:   ${loginCommandHint(mode)}`);
+    if (clients.length === 1) {
+        out(`  1. Sign in to Perplexity once:   ${loginCommandHint(mode, clients[0])}`);
+        out(`     (this signs in to the "${clients[0]}" profile at ${profileDirForClient(clients[0])})`);
+    }
+    else {
+        out("  1. Sign in once for each client you configured:");
+        for (const client of clients) {
+            out(`       ${loginCommandHint(mode, client)}`);
+        }
+    }
     out("     (a separate automation browser opens; sign in THERE, not in your everyday Chrome/Edge)");
     out("  2. Restart your MCP client.");
     out('  3. Ask your agent: "run the perplexity-web health_check tool".');
-    out("  Troubleshooting any time:        " + loginCommandHint(mode).replace(/ login$/, " doctor --online"));
+    for (const client of clients) {
+        out(`  Troubleshooting ${client}: ${doctorCommandHint(mode, client)}`);
+    }
     return 0;
 }
 
 async function runLogin(opts) {
+    const client = parseClientOption(opts.client);
+    if (client === false)
+        return 2;
+    if (client && opts.profile) {
+        bad("Use either --client <name> or --profile <name/path>, not both.");
+        return 2;
+    }
+    if (client) {
+        // Must happen before auth.js/browser.js are imported: they read PERPLEXITY_PROFILE_DIR at module load.
+        process.env.PERPLEXITY_PROFILE_DIR = profileDirForClient(client);
+        info(`Using the "${client}" profile configured by setup: ${process.env.PERPLEXITY_PROFILE_DIR}`);
+    }
     const { ensureAuthenticated } = await import("./auth.js");
     const { closeBrowser } = await import("./browser.js");
     try {
@@ -439,6 +522,17 @@ function dirWritable(dir) {
 }
 
 async function runDoctor(opts) {
+    const client = parseClientOption(opts.client);
+    if (client === false)
+        return 2;
+    if (client && opts.profile) {
+        bad("Use either --client <name> or --profile <name/path>, not both.");
+        return 2;
+    }
+    if (client) {
+        // Must happen before search.js/browser.js are imported: they read PERPLEXITY_PROFILE_DIR at module load.
+        process.env.PERPLEXITY_PROFILE_DIR = profileDirForClient(client);
+    }
     let failed = 0;
     const check = (pass, passMsg, failMsg) => {
         if (pass)
@@ -448,7 +542,7 @@ async function runDoctor(opts) {
             bad(failMsg);
         }
     };
-    out(`perplexity-web-mcp ${PKG.version} doctor`);
+    out(`perplexity-web-mcp ${PKG.version} doctor${client ? ` (client: ${client})` : ""}`);
     check(Number(process.versions.node.split(".")[0]) >= 20, `Node ${process.versions.node}`, `Node ${process.versions.node} is too old; need >= 20`);
     check(canResolve("playwright") && canResolve("@modelcontextprotocol/sdk/package.json"), "Dependencies resolvable", "Dependencies missing: run 'npm install --omit=dev' in the package folder (clone) or reinstall the package");
     check(await chromiumInstalled(), "Playwright Chromium installed", "Chromium missing: run 'npx playwright install chromium'");

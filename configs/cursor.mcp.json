@@ -5,7 +5,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "@aqsacloud/perplexity-web-mcp@^1.5"
+        "@aqsacloud/perplexity-web-mcp@1.5.2"
       ],
       "env": {}
     }

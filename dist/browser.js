@@ -138,36 +138,135 @@ function checkChromiumInstalled() {
     }
 }
 
-function cleanupOrphanedProfileBrowsers(profileDir) {
-    const forceCleanup = /^(1|true|yes)$/i.test(process.env.PERPLEXITY_FORCE_CLEANUP ?? "");
-    if (process.platform === "win32" && forceCleanup) {
+function isForceCleanup() {
+    return /^(1|true|yes)$/i.test(process.env.PERPLEXITY_FORCE_CLEANUP ?? "");
+}
+
+/** Parse newline-separated PID output (PowerShell). */
+export function parsePidList(output) {
+    return String(output ?? "")
+        .split(/\r?\n/)
+        .map((line) => Number.parseInt(line.trim(), 10))
+        .filter((pid) => Number.isInteger(pid) && pid > 0);
+}
+
+/** Parse `ps -A -o pid=,args=` output for Chromium processes bound to a profile directory. */
+export function parsePosixProfileOwners(output, profileDir) {
+    const resolved = path.resolve(profileDir);
+    const needles = [`--user-data-dir=${resolved}`, `--user-data-dir="${resolved}"`];
+    const pids = [];
+    for (const line of String(output ?? "").split(/\r?\n/)) {
+        const match = line.trim().match(/^(\d+)\s+(.*)$/);
+        if (match && needles.some((needle) => match[2].includes(needle))) {
+            pids.push(Number.parseInt(match[1], 10));
+        }
+    }
+    return pids;
+}
+
+/** Live Chromium PIDs bound to profileDir, or null when the OS process list could not be inspected. */
+export function findProfileOwners(profileDir) {
+    const resolved = path.resolve(profileDir);
+    try {
+        if (process.platform === "win32") {
+            const output = execFileSync("powershell.exe", [
+                "-NoProfile",
+                "-Command",
+                '$p = $env:MCP_PROFILE_DIR; Get-CimInstance Win32_Process -Filter "Name=\'chrome.exe\'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($p) } | Select-Object -ExpandProperty ProcessId',
+            ], {
+                env: { ...process.env, MCP_PROFILE_DIR: resolved },
+                encoding: "utf8",
+                stdio: ["ignore", "pipe", "ignore"],
+                timeout: 15000,
+            });
+            return parsePidList(output);
+        }
+        const output = execFileSync("ps", ["-A", "-o", "pid=,args="], {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "ignore"],
+            timeout: 15000,
+        });
+        return parsePosixProfileOwners(output, resolved);
+    }
+    catch {
+        return null;
+    }
+}
+
+function killProfileOwners(profileDir, pids) {
+    if (process.platform === "win32") {
         try {
-            // Stop only Playwright Chrome instances explicitly bound to this MCP profile dir
+            // Stop only Playwright Chrome instances explicitly bound to this MCP profile dir.
             execFileSync("powershell.exe", [
                 "-NoProfile",
                 "-Command",
                 '$p = $env:MCP_PROFILE_DIR; Get-CimInstance Win32_Process -Filter "Name=\'chrome.exe\'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($p) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }',
             ], {
-                env: { ...process.env, MCP_PROFILE_DIR: profileDir },
+                env: { ...process.env, MCP_PROFILE_DIR: path.resolve(profileDir) },
                 stdio: "ignore",
-                timeout: 5000,
+                timeout: 15000,
             });
         }
         catch {
-            // Ignore cleanup failure; fallback lock removal below will still run if stale
+            // Best effort; the retry below will surface a typed error if the lock is still held.
+        }
+        return;
+    }
+    for (const pid of pids) {
+        try {
+            process.kill(pid, "SIGKILL");
+        }
+        catch {
+            // Already gone.
         }
     }
-    else if (process.platform === "win32" && !forceCleanup) {
-        console.error(`[perplexity-web-mcp] Another browser may be using profile "${profileDir}". Set PERPLEXITY_FORCE_CLEANUP=1 to kill it, or close the other MCP client first.`);
-    }
+}
+
+function removeProfileLocks(profileDir) {
     for (const lockName of ["SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile"]) {
         try {
             fs.rmSync(path.join(profileDir, lockName), { force: true });
         }
         catch {
-            // Ignore
+            // Ignore.
         }
     }
+}
+
+/**
+ * Recover from a profile Chromium refused to open. A live owner is never killed and its
+ * locks are never removed unless PERPLEXITY_FORCE_CLEANUP=1; otherwise the caller gets a typed busy error.
+ */
+async function recoverProfileLock(profileDir, slotId, knownOwners = undefined) {
+    const owners = knownOwners === undefined ? findProfileOwners(profileDir) : knownOwners;
+    if (owners === null) {
+        if (!isForceCleanup()) {
+            throw new PerplexityMcpError(ErrorCode.PROFILE_UNAVAILABLE, `Profile "${slotId}" appears locked, and the server could not inspect running processes to confirm whether it is still in use. `
+                + "Close the other MCP client/browser using this profile, or set PERPLEXITY_FORCE_CLEANUP=1 to remove the lock and retry.", {
+                stage: "browser_launch",
+                profile: slotId,
+                recoverable: true,
+            });
+        }
+        console.error(`[perplexity-web-mcp] Could not inspect processes using profile "${slotId}"; PERPLEXITY_FORCE_CLEANUP=1 is set, removing locks.`);
+    }
+    else if (owners.length > 0) {
+        if (!isForceCleanup()) {
+            throw new PerplexityMcpError(ErrorCode.PROFILE_UNAVAILABLE, `Profile "${slotId}" is in use by live Chromium process(es): ${owners.join(", ")}. `
+                + "Close the other MCP client/browser using this profile, or set PERPLEXITY_FORCE_CLEANUP=1 to terminate it.", {
+                stage: "browser_launch",
+                profile: slotId,
+                recoverable: true,
+            });
+        }
+        console.error(`[perplexity-web-mcp] PERPLEXITY_FORCE_CLEANUP=1: terminating Chromium process(es) ${owners.join(", ")} for profile "${slotId}"...`);
+        killProfileOwners(profileDir, owners);
+        await new Promise((resolve) => setTimeout(resolve, 750));
+    }
+    else {
+        console.error(`[perplexity-web-mcp] No live Chromium owner for profile "${slotId}"; removing stale locks and retrying...`);
+    }
+    removeProfileLocks(profileDir);
 }
 
 async function setWindowBounds(slot, page, bounds) {
@@ -265,16 +364,32 @@ export async function launchSlotBrowser(slot, options = {}) {
     }
     catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        if (!/existing browser session|already in use|Singleton/i.test(msg)) {
+        const knownLockError = /existing browser session|already in use|already running|ProcessSingleton|Singleton/i.test(msg);
+        // Playwright sometimes reports a locked profile as a generic "Target page, context or browser
+        // has been closed" after Chromium exits. Ask the OS before deciding whether this is recoverable.
+        const ambiguousLockError = /Target page, context or browser has been closed/i.test(msg);
+        const owners = knownLockError || ambiguousLockError ? findProfileOwners(slot.dir) : [];
+        if (!knownLockError && (!ambiguousLockError || !owners || owners.length === 0)) {
             throw new PerplexityMcpError(ErrorCode.PROFILE_UNAVAILABLE, `Failed launching Chromium for profile "${slot.id}": ${msg}`, {
                 stage: "browser_launch",
                 profile: slot.id,
                 cause: err,
             });
         }
-        console.error(`[perplexity-web-mcp] Detected orphaned Chrome using profile "${slot.id}"; cleaning up and retrying...`);
-        cleanupOrphanedProfileBrowsers(slot.dir);
-        slot.context = await openPersistentContext(slot.dir, headless);
+        console.error(`[perplexity-web-mcp] Detected a locked profile "${slot.id}"; checking for a live owner...`);
+        await recoverProfileLock(slot.dir, slot.id, owners);
+        try {
+            slot.context = await openPersistentContext(slot.dir, headless);
+        }
+        catch (retryErr) {
+            const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+            throw new PerplexityMcpError(ErrorCode.PROFILE_UNAVAILABLE, `Failed launching Chromium for profile "${slot.id}" after stale-lock recovery: ${retryMsg}. `
+                + "If another MCP client is using this profile, close it or set PERPLEXITY_FORCE_CLEANUP=1.", {
+                stage: "browser_launch",
+                profile: slot.id,
+                cause: retryErr,
+            });
+        }
     }
     slot.context.on("close", () => {
         slot.context = null;

@@ -128,14 +128,42 @@ server.prompt(
 
 server.prompt(
     "regression_research",
-    "Compare answers from multiple Perplexity AI models to find consensus and divergence on a topic.",
+    "Research a software regression: cited release notes, issue reports, version/date verification, ranked hypotheses, and a local verification plan.",
+    { query: z.string().describe("The regression to investigate: symptom, error text, affected version(s), and environment") },
+    ({ query }) => ({
+        messages: [{
+            role: "user",
+            content: {
+                type: "text",
+                text: `Investigate this software regression with the perplexity-web "search" tool and produce an evidence-backed triage. Do not guess: every version, date, and breaking-change claim must carry a citation.
+
+Regression to investigate:
+${query}
+
+Work in this order:
+1. Restate the symptom, affected version(s), and environment. Call out anything missing.
+2. Search official release notes / changelogs / migration guides for the version range. Cite the exact version and date.
+3. Search issue trackers and forums for the same error text or symptom. Separate confirmed reports from speculation.
+4. Verify each candidate version/date/API claim against a primary source. Mark claims supported, weak, or unverified (use verify_claims: true where useful).
+5. Rank 2-4 plausible causes by likelihood, with supporting citations and the evidence that would rule each one out.
+6. Give a local verification plan: commands, files, or tests that distinguish the top hypotheses. Keep it runnable in the current workspace.
+
+Return: a short timeline, the ranked hypotheses, and the verification plan.`,
+            },
+        }],
+    })
+);
+
+server.prompt(
+    "compare_models",
+    "Ask one question across multiple Perplexity AI models and compare consensus vs model-specific claims.",
     { query: z.string().describe("The question to compare across models") },
     ({ query }) => ({
         messages: [{
             role: "user",
             content: {
                 type: "text",
-                text: `Use the perplexity-web "compare_models" tool with verify_claims: true to compare answers across models for the following question. Highlight agreed facts, single-model specifics, and any unverified claims.\n\nQuery: ${query}`,
+                text: `Use the perplexity-web "compare_models" tool with verify_claims: true to compare answers across models for the following question. Highlight agreed facts, single-model specifics, shared citations, and any unverified claims.\n\nQuery: ${query}`,
             },
         }],
     })
@@ -207,7 +235,7 @@ server.registerTool(
     {
         title: "Search Perplexity",
         description: "Search the web using Perplexity.ai with claim-level citation provenance ([1] markers, snippets, dates), optional live claim-source verification (supported/weak/unverified), local caching, cancellation-safe streaming, progress notifications, partial .txt checkpoints, typed error JSON, poolable browser profiles, and optional official Agent API backend. Supports model, thread_url, timeout_seconds (default 900s / max 1800s), profile, backend, verify_claims, no_cache, and output_file / auto .txt spooling (>= 15000 chars).",
-        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
         inputSchema: {
             query: z.string().describe("The search query or follow-up question"),
             model: z
@@ -245,7 +273,7 @@ server.registerTool(
     {
         title: "Advanced Perplexity Search",
         description: "Search Perplexity.ai with specific source selection (web, academic, social), claim-level citation provenance ([1] markers, snippets, dates), optional live claim-source verification, local caching, cancellation-safe streaming, progress notifications, partial .txt checkpoints, typed error JSON, poolable browser profiles, and optional official Agent API backend.",
-        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
         inputSchema: {
             query: z.string().describe("The search query"),
             sources: z
@@ -287,7 +315,7 @@ server.registerTool(
     {
         title: "Compare Perplexity Models",
         description: "Ask one question across 2–5 Perplexity models (running concurrently when multiple PERPLEXITY_PROFILE_DIRS profiles or backend='api' are configured; sequential with a single profile), compare shared citations and agreed/divergent key facts, and return a consolidated Markdown report (spooled to .txt if >= 15000 chars or output_file is set).",
-        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
         inputSchema: {
             query: z.string().describe("Question or architecture/code comparison prompt to send to each model"),
             models: z
@@ -329,7 +357,7 @@ server.registerTool(
     {
         title: "Health Check",
         description: "Quick (~5s) diagnostic check verifying Perplexity authentication, absence of Cloudflare blocks, composer search input, add/sources trigger, model selector hydration, and writable local directories. Saves a diagnostic HTML+PNG snapshot automatically if any check fails.",
-        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
         inputSchema: {
             profile: profileSchema,
         },

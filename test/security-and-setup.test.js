@@ -1,13 +1,29 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { assertPublicHost, isBlockedAddress, parsePublicUrl, BlockedAddressError } from "../dist/net-guard.js";
 import { fetchPageText } from "../dist/verify.js";
 import { writeTextOutputFile, OutputPathError, resolveOutputDir } from "../dist/output.js";
-import { detectOpenCodeLayout, mergeClientConfig, parseArgs, buildServerSpec } from "../dist/setup.js";
+import { detectOpenCodeLayout, mergeClientConfig, parseArgs, buildServerSpec, loginCommandHint, doctorCommandHint, claudeAddCommand, profileDirForClient } from "../dist/setup.js";
 import { resolveLoginTimeoutMs, DEFAULT_LOGIN_TIMEOUT_MS } from "../dist/auth.js";
+import { parsePidList, parsePosixProfileOwners } from "../dist/browser.js";
+
+const TEST_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const CLI = path.join(TEST_ROOT, "dist", "cli.js");
+const PKG = JSON.parse(fs.readFileSync(path.join(TEST_ROOT, "package.json"), "utf8"));
+
+function runCli(args, env = {}) {
+    return spawnSync(process.execPath, [CLI, ...args], {
+        cwd: TEST_ROOT,
+        env: { ...process.env, ...env },
+        encoding: "utf8",
+        timeout: 120_000,
+    });
+}
 
 describe("security: net-guard.js & SSRF protection", () => {
     it("isBlockedAddress correctly blocks loopback, private, link-local, metadata, and IPv6 local addresses", () => {
@@ -213,9 +229,89 @@ describe("setup CLI & config ergonomics", () => {
         assert.equal(parsed.print, true);
     });
 
-    it("buildServerSpec isolates profile per client and pins version", () => {
+    it("buildServerSpec isolates the profile per client and pins the exact version", () => {
         const spec = buildServerSpec({ mode: "npx", client: "cursor" });
         assert.ok(spec.env.PERPLEXITY_PROFILE_DIR.includes("cursor"));
-        assert.ok(spec.args.some((arg) => /@\^1\.\d+/.test(arg)));
+        assert.ok(spec.args.includes(`${PKG.name}@${PKG.version}`), `expected exact pin @${PKG.version}, got ${spec.args.join(" ")}`);
+        assert.ok(!spec.args.some((arg) => arg.includes("^")), "caret ranges are stripped by cmd.exe on Windows");
+    });
+
+    it("login/doctor hints target the client profile that setup configured", () => {
+        assert.match(loginCommandHint("npx", "opencode"), /login --client opencode$/);
+        assert.match(doctorCommandHint("npx", "cursor"), /doctor --online --client cursor$/);
+
+        const spec = buildServerSpec({ mode: "npx", client: "claude" });
+        const claudeCmd = claudeAddCommand(spec);
+        assert.ok(claudeCmd.includes(`--env "PERPLEXITY_PROFILE_DIR=${profileDirForClient("claude")}"`), claudeCmd);
+    });
+
+    it("setup --client writes the client profile and prints a matching login command", () => {
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), "pwmcp-home-"));
+        const data = fs.mkdtempSync(path.join(os.tmpdir(), "pwmcp-data-"));
+        try {
+            const res = runCli(["setup", "--client", "opencode", "--skip-deps", "--skip-browser", "--no-skill"], {
+                PERPLEXITY_SETUP_HOME: home,
+                PERPLEXITY_DATA_DIR: data,
+            });
+            assert.equal(res.status, 0, res.stderr || res.stdout);
+
+            const configPath = path.join(home, ".config", "opencode", "opencode.json");
+            const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+            const entry = config.mcp.servers["perplexity-web"];
+            const expectedProfile = path.join(data, "profiles", "opencode");
+            assert.equal(entry.environment.PERPLEXITY_PROFILE_DIR, expectedProfile);
+
+            assert.ok(res.stdout.includes("login --client opencode"), res.stdout);
+            assert.ok(res.stdout.includes(expectedProfile), res.stdout);
+            assert.ok(!res.stdout.includes("Setup finished with"), res.stdout);
+        }
+        finally {
+            fs.rmSync(home, { recursive: true, force: true });
+            fs.rmSync(data, { recursive: true, force: true });
+        }
+    });
+
+    it("doctor --client checks the same profile path that setup writes", () => {
+        const data = fs.mkdtempSync(path.join(os.tmpdir(), "pwmcp-doctor-"));
+        try {
+            const res = runCli(["doctor", "--client", "cursor"], { PERPLEXITY_DATA_DIR: data });
+            assert.ok(res.stdout.includes(path.join(data, "profiles", "cursor")), res.stdout);
+        }
+        finally {
+            fs.rmSync(data, { recursive: true, force: true });
+        }
+    });
+
+    it("setup --print emits a typed mcpServers snippet with the client profile", () => {
+        const data = fs.mkdtempSync(path.join(os.tmpdir(), "pwmcp-print-"));
+        try {
+            const res = runCli(["setup", "--print", "--client", "cursor", "--mode", "npx"], { PERPLEXITY_DATA_DIR: data });
+            assert.equal(res.status, 0, res.stderr || res.stdout);
+            const snippet = JSON.parse(res.stdout);
+            const entry = snippet.mcpServers["perplexity-web"];
+            assert.equal(entry.type, "stdio");
+            assert.equal(entry.env.PERPLEXITY_PROFILE_DIR, path.join(data, "profiles", "cursor"));
+            assert.ok(entry.args.includes(`${PKG.name}@${PKG.version}`));
+        }
+        finally {
+            fs.rmSync(data, { recursive: true, force: true });
+        }
+    });
+});
+
+describe("browser: profile owner detection", () => {
+    it("parsePosixProfileOwners matches only processes bound to the requested profile", () => {
+        const dirA = path.join(os.tmpdir(), "pwmcp-profile-a");
+        const dirB = path.join(os.tmpdir(), "pwmcp-profile-b");
+        const output = [
+            `123 /usr/bin/chromium --user-data-dir=${dirA} --headless`,
+            `456 /usr/bin/chromium --user-data-dir=${dirB}`,
+            `789 /usr/bin/chromium --user-data-dir="${dirA}"`,
+        ].join("\n");
+        assert.deepEqual(parsePosixProfileOwners(output, dirA), [123, 789]);
+    });
+
+    it("parsePidList ignores blanks and non-numeric output", () => {
+        assert.deepEqual(parsePidList("101\n\n  202 \nnot-a-pid\n"), [101, 202]);
     });
 });

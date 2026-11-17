@@ -1,5 +1,6 @@
 node_modules/
 .playwright/
+profiles/
 outputs/
 cache/
 diagnostics/

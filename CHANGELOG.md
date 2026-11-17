@@ -2,6 +2,24 @@
 
 All notable changes to `perplexity-web-orchestrator` (`@aqsacloud/perplexity-web-mcp`) are documented in this file.
 
+## [1.5.2] - 2026-11-17
+
+### First-Run Correctness
+- **Client-aware login and doctor (`dist/setup.js`)**: `setup --client <c>` now prints `login --client <c>` and `doctor --client <c>` instead of commands that silently used the shared default profile. Both commands resolve `PERPLEXITY_PROFILE_DIR` before importing the browser modules, so the profile they check is exactly the one setup wrote.
+- **Claude global `--env` (`dist/setup.js`)**: The printed `claude mcp add --scope user ...` command now includes `--env "PERPLEXITY_PROFILE_DIR=<path>"`, so user-level Claude Code installs keep per-client profile isolation.
+- **`profiles/` is git-ignored**: Browser profiles created in clone mode no longer appear in `git status`. These folders contain Perplexity session cookies.
+
+### Isolation & Reliability
+- **Live-owner detection (`dist/browser.js`)**: Before recovering a locked profile, the server inspects `chrome.exe` command lines on Windows and `ps` output on macOS/Linux. A live owner now returns typed `PROFILE_UNAVAILABLE` with guidance; lock files are removed only when no owner exists or `PERPLEXITY_FORCE_CLEANUP=1` is set. Retry launch failures are also wrapped as typed errors.
+- **Accurate tool annotations (`dist/index.js`)**: `search`, `search_advanced`, `compare_models`, and `health_check` now report `readOnlyHint: false` because they can write cache entries, output files, or diagnostic snapshots.
+
+### Prompts & Packaging
+- **Real regression workflow (`dist/index.js`)**: `regression_research` now instructs a full regression triage (symptom/version, release notes, issue reports, claim verification, ranked hypotheses, local verification plan). The previous comparison content moved to a new `compare_models` prompt.
+- **Exact version pins**: Generated configs and `configs/*.json` pin `@1.5.2` instead of `@^1.5`. `cmd.exe` strips the caret on Windows, which silently changed the resolved version.
+- **`setup --print` polish**: Emits a paste-ready `mcpServers` snippet with `type: "stdio"`, supports `--client <c>` to include the per-client profile, and validates the client name.
+- **Documentation**: README and SKILL now describe per-client profiles, correct login commands, headless-by-default behavior, exact data paths, and the updated cleanup semantics.
+- **Tests**: Added setup/doctor integration tests in a temporary home/data dir, login-hint and Claude `--env` assertions, exact-pin checks, and process-list parser coverage.
+
 ## [1.5.1] - 2026-11-17
 
 ### Reliability & Process Isolation

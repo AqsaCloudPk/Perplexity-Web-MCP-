@@ -131,8 +131,68 @@ describe("output.js", () => {
         const fileMatch = formatted.match(/^File:\s*(.+)$/m);
         assert.ok(fileMatch);
         const spooledContent = fs.readFileSync(fileMatch[1].trim(), "utf8");
-        assert.match(spooledContent, /-> \[1\] \[supported\]/);
+        assert.match(spooledContent, /Node\.js v22\.11\.0 entered Active LTS/);
+        assert.match(spooledContent, /\| supported \| \[1\] \|/);
         assert.match(spooledContent, /Verification: supported=1, weak=0, unverified=0 \(pages=1\/1\)/);
+    });
+
+    it("includes the claim/verdict/source table inline even with more than 12 claims", () => {
+        const claims = Array.from({ length: 17 }, (_, i) => ({
+            index: i + 1,
+            text: `Claim ${i + 1}: Node 26 changed behavior for native modules [1].`,
+            citations: [1],
+            urls: ["https://nodejs.org/en"],
+            verification: {
+                status: i % 3 === 0 ? "supported" : i % 3 === 1 ? "weak" : "unverified",
+                reason: i % 3 === 0 ? "facts_found" : "partial_match",
+            },
+        }));
+        const result = {
+            answer: "Short answer [1].",
+            sources: [{ index: 1, title: "Node", url: "https://nodejs.org/en" }],
+            claims,
+            verificationSummary: {
+                checkedClaims: 17,
+                supported: 6,
+                weak: 6,
+                unverified: 5,
+                pagesChecked: 1,
+                pagesLoaded: 1,
+                durationMs: 42,
+            },
+            profile: "default",
+            backend: "browser",
+        };
+
+        const formatted = formatResult(result, { query: "claims", env: { PERPLEXITY_LONG_OUTPUT_CHARS: "50000" } });
+        assert.match(formatted, /Claim Verification:/);
+        assert.match(formatted, /Verification: supported=6, weak=6, unverified=5/);
+        assert.match(formatted, /\| # \| Claim \| Verdict \| Sources \|/);
+        assert.match(formatted, /Claim 17: Node 26 changed behavior/);
+        assert.match(formatted, /\| supported \| \[1\] \|/);
+        assert.match(formatted, /\| weak \(partial_match\) \| \[1\] \|/);
+        assert.match(formatted, /\| unverified \(partial_match\) \| \[1\] \|/);
+    });
+
+    it("flattens Markdown table rows inside claim cells", () => {
+        const result = {
+            answer: "Short answer [1].",
+            sources: [{ index: 1, title: "Node", url: "https://nodejs.org/en" }],
+            claims: [{
+                index: 1,
+                text: "| Node 26 | 147 | Rebuild addons |",
+                citations: [1],
+                urls: ["https://nodejs.org/en"],
+                verification: { status: "supported" },
+            }],
+            verificationSummary: { checkedClaims: 1, supported: 1, weak: 0, unverified: 0, pagesChecked: 1, pagesLoaded: 1 },
+            profile: "default",
+            backend: "browser",
+        };
+
+        const formatted = formatResult(result, { query: "table", env: { PERPLEXITY_LONG_OUTPUT_CHARS: "50000" } });
+        assert.match(formatted, /Node 26; 147; Rebuild addons/);
+        assert.ok(!formatted.includes("\\|"));
     });
 
     it("writes and removes partial checkpoints cleanly", () => {

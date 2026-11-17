@@ -1,6 +1,6 @@
 {
   "name": "@aqsacloud/perplexity-web-mcp",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "description": "MCP server and orchestrator skill for Perplexity (Pro) via Playwright: multi-model comparison, claim verification, caching, and an optional official-API backend. Unofficial.",
   "type": "module",
   "main": "dist/index.js",

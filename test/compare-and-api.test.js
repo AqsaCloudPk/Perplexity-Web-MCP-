@@ -15,7 +15,7 @@ after(() => {
 });
 
 describe("compare.js", () => {
-    it("analyzeComparison extracts agreed facts, unique specifics, and shared citations", () => {
+    it("analyzeComparison extracts agreed claims, unique specifics, and shared citations", () => {
         const analysis = analyzeComparison([
             {
                 model: "GPT-6.1 Sol",
@@ -48,12 +48,64 @@ describe("compare.js", () => {
         assert.equal(analysis.totalModels, 3);
         assert.equal(analysis.succeededCount, 2);
         assert.equal(analysis.failedCount, 1);
-        assert.ok(analysis.agreedFacts.some((f) => f.value.includes("22.11.0") && f.models.length === 2));
-        assert.ok(analysis.agreedFacts.some((f) => f.type === "date" && f.models.length === 2));
-        assert.ok(analysis.divergentOrUniqueFacts.some((f) => /30 months/.test(f.value) && f.model === "GPT-6.1 Sol"));
+        assert.ok(analysis.agreedClaims.some((c) => /22\.11\.0/.test(c.text) && c.models.length === 2));
+        assert.ok(analysis.agreedClaims.some((c) => /2024|October 29/.test(c.text) && c.models.length === 2));
+        assert.ok(analysis.divergentFacts.some((f) => /30 months/.test(f.value) && f.model === "GPT-6.1 Sol"));
         assert.equal(analysis.sharedSources.length, 1);
         assert.equal(analysis.sharedSources[0].url, "https://nodejs.org/releases");
         assert.equal(analysis.totalUniqueSources, 2);
+    });
+
+    it("uses sentence-level consensus and ignores isolated ranking tokens", () => {
+        const analysis = analyzeComparison([
+            {
+                model: "GPT-6.1 Sol",
+                ok: true,
+                result: {
+                    answer: "RATING_PERSONAL: 9/10\nRANK_OVERALL: 1 of 5\nOption Best Useful 17. Node 26 removed the legacy _stream_readable module, so dependencies that require it fail at startup. The native addon ABI is 147, so Node 24 binaries must be rebuilt.",
+                    sources: [],
+                },
+            },
+            {
+                model: "Claude Sonnet 5.5",
+                ok: true,
+                result: {
+                    answer: "RATING_PERSONAL: 8/10\nRANK_OVERALL: 1 of 5\nOption Best Useful 17. Node 26 dropped the legacy _stream_readable module, which breaks dependencies that still require it. The native addon ABI is 147, so Node 24 binaries must be rebuilt.",
+                    sources: [],
+                },
+            },
+        ]);
+
+        assert.ok(analysis.agreedClaims.length >= 1);
+        assert.ok(analysis.agreedClaims.some((c) => /_stream_readable/.test(c.text) && c.models.length === 2));
+        assert.ok(analysis.agreedClaims.every((c) => !/^\s*(Rank|Option|Best|Useful|17)\s*$/i.test(c.text)));
+        assert.ok(analysis.divergentFacts.every((f) => f.value !== "17"));
+    });
+
+    it("skips Markdown tables and heading fragments in consensus", () => {
+        const analysis = analyzeComparison([
+            {
+                model: "GPT-6.1 Sol",
+                ok: true,
+                result: {
+                    answer: "### What to check\n| ABI | Version | Effect |\n| --- | --- | --- |\n| Node 26 | 147 | Rebuild addons |\nNode 26 uses ABI 147, so Node 24 addons must be rebuilt for compatibility.",
+                    sources: [],
+                },
+            },
+            {
+                model: "Claude Sonnet 5.5",
+                ok: true,
+                result: {
+                    answer: "### What to check\n| ABI | Version | Effect |\n| --- | --- | --- |\n| Node 26 | 147 | Rebuild addons |\nNode.js 26 uses ABI 147, so native addons built for Node 24 must be rebuilt.",
+                    sources: [],
+                },
+            },
+        ]);
+
+        assert.ok(analysis.agreedClaims.length >= 1);
+        assert.ok(analysis.agreedClaims.some((c) => /ABI 147/i.test(c.text)));
+        assert.ok(analysis.agreedClaims.every((c) => !/\|/.test(c.text)));
+        assert.ok(analysis.agreedClaims.every((c) => !/---/.test(c.text)));
     });
 
     it("compareModels distributes models across pooled browser profiles and survives partial errors", async () => {
@@ -111,6 +163,7 @@ describe("compare.js", () => {
         const inline = formatComparison(comparison, { env: { PERPLEXITY_LONG_OUTPUT_CHARS: "50000" } });
         assert.match(inline, /Multi-Model Comparison \(2\/3 succeeded/);
         assert.match(inline, /FAILED \(MODEL_UNAVAILABLE\)/);
+        assert.match(inline, /Agreed Claims/);
         assert.match(inline, /Metadata: \{.*"spooled":false/);
 
         // Spooled file format check

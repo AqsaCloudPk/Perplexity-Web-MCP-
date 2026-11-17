@@ -163,7 +163,7 @@ server.prompt(
             role: "user",
             content: {
                 type: "text",
-                text: `Use the perplexity-web "compare_models" tool with verify_claims: true to compare answers across models for the following question. Highlight agreed facts, single-model specifics, shared citations, and any unverified claims.\n\nQuery: ${query}`,
+                text: `Use the perplexity-web "compare_models" tool with verify_claims: true to compare answers across models for the following question. Highlight agreed claims, single-model specifics, shared citations, and any unverified claims.\n\nQuery: ${query}`,
             },
         }],
     })
@@ -314,7 +314,7 @@ server.registerTool(
     "compare_models",
     {
         title: "Compare Perplexity Models",
-        description: "Ask one question across 2–5 Perplexity models (running concurrently when multiple PERPLEXITY_PROFILE_DIRS profiles or backend='api' are configured; sequential with a single profile), compare shared citations and agreed/divergent key facts, and return a consolidated Markdown report (spooled to .txt if >= 15000 chars or output_file is set).",
+        description: "Ask one question across 2–5 Perplexity models (running concurrently when multiple PERPLEXITY_PROFILE_DIRS profiles or backend='api' are configured; sequential with a single profile), compare shared citations and sentence-level agreed/divergent claims, and return a consolidated Markdown report (spooled to .txt if >= 15000 chars or output_file is set).",
         annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
         inputSchema: {
             query: z.string().describe("Question or architecture/code comparison prompt to send to each model"),

@@ -153,27 +153,57 @@ function formatSourcesBlock(sources, includeSnippets = true) {
     }).join("\n");
 }
 
-function formatClaimsBlock(claims, verificationSummary = null) {
+function escapeTableCell(value) {
+    return String(value ?? "").replace(/\|/g, "\\|").replace(/\s+/g, " ").trim();
+}
+
+function claimSourceLabel(claim) {
+    const refs = (claim.citations ?? []).map((n) => `[${n}]`);
+    if (refs.length > 0)
+        return refs.join(" ");
+    const hosts = (claim.urls ?? []).map((url) => {
+        try {
+            return new URL(url).hostname.replace(/^www\./i, "");
+        }
+        catch {
+            return String(url);
+        }
+    }).filter(Boolean);
+    return hosts.length > 0 ? hosts.slice(0, 2).join(", ") : "—";
+}
+
+function claimVerdictLabel(claim) {
+    const verification = claim?.verification;
+    if (!verification?.status)
+        return "—";
+    const reason = verification.reason && verification.status !== "supported"
+        ? ` (${String(verification.reason).slice(0, 60)})`
+        : "";
+    return `${verification.status}${reason}`;
+}
+
+function formatClaimsBlock(claims, verificationSummary = null, { maxRows = 50 } = {}) {
     if (!claims || claims.length === 0)
         return "";
     const durationNote = typeof verificationSummary?.durationMs === "number" ? `, ${verificationSummary.durationMs}ms` : "";
     const summaryLine = verificationSummary
         ? `Verification: supported=${verificationSummary.supported}, weak=${verificationSummary.weak}, unverified=${verificationSummary.unverified} (pages=${verificationSummary.pagesLoaded}/${verificationSummary.pagesChecked}${durationNote})\n`
         : "";
-    const lines = claims.map((c) => {
-        const refs = (c.citations ?? []).map((n) => `[${n}]`).join("");
-        const urlList = (c.urls ?? []).join(", ");
-        const cleanText = String(c.text ?? "").replace(/\s+/g, " ").trim();
-        const trimmed = cleanText.length > 260 ? `${cleanText.slice(0, 260)}...` : cleanText;
-        let verifyTag = "";
-        if (c.verification?.status) {
-            const v = c.verification;
-            const detail = v.missingFacts?.length ? ` missing=[${v.missingFacts.join(", ")}]` : "";
-            verifyTag = ` [${v.status}${v.reason && v.status !== "supported" ? `:${v.reason}` : ""}${detail}]`;
-        }
-        return `- ${trimmed}${refs ? ` -> ${refs}` : ""}${verifyTag}${urlList ? ` (${urlList})` : ""}`;
-    }).join("\n");
-    return `\n\nClaim Provenance:\n${summaryLine}${lines}`;
+    const shown = claims.slice(0, maxRows);
+    const rows = shown.map((claim, i) => {
+        const cleanText = String(claim.text ?? "")
+            .replace(/\s*\|\s*/g, "; ")
+            .replace(/;\s*;/g, ";")
+            .replace(/^;\s*|\s*;$/g, "")
+            .replace(/\s+/g, " ")
+            .trim();
+        const text = escapeTableCell(cleanText.length > 220 ? `${cleanText.slice(0, 217)}...` : cleanText);
+        return `| ${claim.index ?? i + 1} | ${text} | ${claimVerdictLabel(claim)} | ${claimSourceLabel(claim)} |`;
+    });
+    const omitted = claims.length - shown.length;
+    const title = verificationSummary ? "Claim Verification" : "Claim Provenance";
+    const note = omitted > 0 ? `\n\n… ${omitted} more claim(s) not shown.` : "";
+    return `\n\n${title}:\n${summaryLine}\n| # | Claim | Verdict | Sources |\n| ---: | --- | --- | --- |\n${rows.join("\n")}${note}`;
 }
 
 function formatAttachmentsBlock(attachments) {
@@ -354,11 +384,8 @@ export function formatResult(result, options = {}) {
     const prefixNotice = notices.length > 0 ? `${notices.join("\n")}\n\n` : "";
 
     if (!explicitFile && !exceedsThreshold) {
-        const inlineClaimsText = (result.claims?.length ?? 0) > 0 && (result.claims?.length ?? 0) <= 12
-            ? claimsText
-            : "";
         const meta = buildResultMetadata(result, { model, spooled: false });
-        return `${prefixNotice}${result.answer}${inlineClaimsText}${attachmentsText}${sourcesText}${threadText}\n\nMetadata: ${JSON.stringify(meta)}`;
+        return `${prefixNotice}${result.answer}${claimsText}${attachmentsText}${sourcesText}${threadText}\n\nMetadata: ${JSON.stringify(meta)}`;
     }
 
     const fullDocument = buildFileDocument(result, {
@@ -374,7 +401,7 @@ export function formatResult(result, options = {}) {
     if (!writeRes.ok) {
         const meta = buildResultMetadata(result, { model, spooled: false });
         return `[Warning: could not save output file "${writeRes.targetPath}" (${writeRes.error}); returning inline]\n\n`
-            + `${prefixNotice}${result.answer}${attachmentsText}${sourcesText}${threadText}\n\nMetadata: ${JSON.stringify(meta)}`;
+            + `${prefixNotice}${result.answer}${claimsText}${attachmentsText}${sourcesText}${threadText}\n\nMetadata: ${JSON.stringify(meta)}`;
     }
 
     const answerLines = result.answer.split(/\r?\n/).length;

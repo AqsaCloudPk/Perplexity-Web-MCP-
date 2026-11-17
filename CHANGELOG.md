@@ -2,6 +2,22 @@
 
 All notable changes to `perplexity-web-orchestrator` (`@aqsacloud/perplexity-web-mcp`) are documented in this file.
 
+## [1.5.3] - 2026-11-17
+
+### Verification Output
+- **Inline claim/verdict/source table (`dist/output.js`)**: `verify_claims` responses now always include a Markdown table with claim text, verdict/reason, and citation references. The previous formatter omitted the entire claim block when there were more than 12 claims, leaving only metadata counts. Markdown tables inside Perplexity answers are flattened so claim cells stay readable.
+- **Same table in files and checkpoints**: Spooled `.txt` output and partial checkpoints use the same claim table.
+
+### Model Comparison
+- **Sentence-level consensus (`dist/compare.js`)**: `compare_models` now matches sentences across models using token Jaccard plus overlap, instead of intersecting lexical key facts. It no longer emits isolated tokens such as `Rank`, `Option`, `Best`, `Useful`, or `17` as “agreed facts.”
+- **Cleaner divergent specifics**: Only dates, versions, and unit-bearing or 3+ digit numbers are surfaced as single-model specifics.
+- **Markdown table/heading filtering**: Table rows, separators, and ranking metadata are excluded from consensus claims.
+- **Metadata**: `agreedClaimCount` and `divergentFactCount` replace the old fact counts.
+
+### Tests & Docs
+- Added regression tests for >12-claim inline tables, table-row claim cleanup, noisy ranking tokens, and Markdown table/heading filtering.
+- Updated README and SKILL wording from “agreed facts” to “agreed claims.”
+
 ## [1.5.2] - 2026-11-17
 
 ### First-Run Correctness

@@ -60,9 +60,9 @@ npx -y @aqsacloud/perplexity-web-mcp doctor --online --client opencode
 
 ## 🛠️ MCP Tools Included
 
-1. **`search`**: Query Perplexity with claim-level `[1]`, `[2]` citation provenance, optional live citation verification (`verify_claims: true`), TTL caching, and automatic long-output disk spooling (`>= 15,000` chars).
+1. **`search`**: Query Perplexity with claim-level `[1]`, `[2]` citation provenance, optional live citation verification (`verify_claims: true`) with an inline claim/verdict/source table, TTL caching, and automatic long-output disk spooling (`>= 15,000` chars).
 2. **`search_advanced`**: Filter sources across `web`, `academic`, or `social`.
-3. **`compare_models`**: Query 2–5 frontier models sequentially by default (concurrently when multiple `PERPLEXITY_PROFILE_DIRS` profile slots or `backend: "api"` are configured), returning agreed facts, divergent specifics, and shared citations.
+3. **`compare_models`**: Query 2–5 frontier models sequentially by default (concurrently when multiple `PERPLEXITY_PROFILE_DIRS` profile slots or `backend: "api"` are configured), returning sentence-level agreed claims, divergent specifics, and shared citations.
 4. **`list_models`**: Discover currently available frontier models on your Perplexity tier.
 5. **`set_default_model`**: Set a sticky default model (e.g. `GPT-6.1 Sol`, `Claude Sonnet 5.5`, `Best`).
 6. **`health_check`**: Verify browser launch, Cloudflare status, composer input, and write permissions in ~5 seconds. Failure snapshots are written under the server's data directory (`~/.perplexity-web-mcp/diagnostics/` for npx installs; `<repo>/diagnostics/` for clones).
@@ -87,7 +87,7 @@ In `~/.config/opencode/opencode.json` (global) or `./opencode.json` (workspace):
         "command": [
           "npx",
           "-y",
-          "@aqsacloud/perplexity-web-mcp@1.5.2"
+          "@aqsacloud/perplexity-web-mcp@1.5.3"
         ],
         "environment": {},
         "timeout": {
@@ -104,7 +104,7 @@ In `~/.config/opencode/opencode.json` (global) or `./opencode.json` (workspace):
 Add with the Claude CLI:
 
 ```bash
-claude mcp add perplexity-web -- npx -y @aqsacloud/perplexity-web-mcp@1.5.2
+claude mcp add perplexity-web -- npx -y @aqsacloud/perplexity-web-mcp@1.5.3
 ```
 
 Or in your project's `.mcp.json`:
@@ -115,7 +115,7 @@ Or in your project's `.mcp.json`:
     "perplexity-web": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@aqsacloud/perplexity-web-mcp@1.5.2"],
+      "args": ["-y", "@aqsacloud/perplexity-web-mcp@1.5.3"],
       "env": {}
     }
   }
@@ -131,7 +131,7 @@ In `~/.cursor/mcp.json` or `.cursor/mcp.json`:
     "perplexity-web": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@aqsacloud/perplexity-web-mcp@1.5.2"],
+      "args": ["-y", "@aqsacloud/perplexity-web-mcp@1.5.3"],
       "env": {}
     }
   }
@@ -146,7 +146,7 @@ In `~/.gemini/config/mcp_config.json`:
   "mcpServers": {
     "perplexity-web": {
       "command": "cmd.exe",
-      "args": ["/c", "npx", "-y", "@aqsacloud/perplexity-web-mcp@1.5.2"],
+      "args": ["/c", "npx", "-y", "@aqsacloud/perplexity-web-mcp@1.5.3"],
       "env": {}
     }
   }
@@ -163,7 +163,7 @@ npx -y @aqsacloud/perplexity-web-mcp setup --print --client cursor
 
 The output is wrapped in `mcpServers` for Claude/Cursor-style clients. Other clients use different shapes: OpenCode V2 uses `mcp.servers` with a `command` array and `environment`, and Zed uses `context_servers` with a nested `command` object. Use `setup --client opencode` to write OpenCode directly, or paste the inner server entry into your client's existing shape. Without `--client`, the snippet uses the shared default profile.
 
-Client configs in this repository pin the exact version (`@1.5.2`) instead of a caret range. A caret is stripped by `cmd.exe` on Windows, which silently changes the resolved version; update the pin deliberately when you upgrade.
+Client configs in this repository pin the exact version (`@1.5.3`) instead of a caret range. A caret is stripped by `cmd.exe` on Windows, which silently changes the resolved version; update the pin deliberately when you upgrade.
 
 ---
 

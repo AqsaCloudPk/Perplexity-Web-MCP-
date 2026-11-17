@@ -10,7 +10,7 @@ const MONTHS = [
 const MONTH_ABBR = MONTHS.map((m) => m.slice(0, 3));
 const MONTH_PATTERN = "(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\.?";
 
-const STOPWORDS = new Set([
+export const STOPWORDS = new Set([
     "a", "an", "and", "are", "as", "at", "be", "been", "but", "by", "can", "did", "do", "does", "for", "from",
     "had", "has", "have", "he", "her", "his", "how", "i", "if", "in", "into", "is", "it", "its", "may", "more",
     "most", "no", "not", "of", "on", "or", "our", "she", "so", "such", "than", "that", "the", "their", "them",
@@ -136,6 +136,7 @@ export function extractKeyFacts(text, { maxFacts = 10 } = {}) {
             value: m.trim(),
             key: `number:${plain}${unitNorm ? `:${unitNorm.replace(/s$/, "")}` : ""}`,
             numeric: plain,
+            unit: unitNorm || undefined,
             variants: Array.from(variants),
         });
     });

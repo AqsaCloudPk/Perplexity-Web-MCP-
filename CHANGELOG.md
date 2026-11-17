@@ -1,6 +1,24 @@
 # Changelog
 
-All notable changes to `perplexity-web-orchestrator` (`perplexity-web-mcp`) are documented in this file.
+All notable changes to `perplexity-web-orchestrator` (`@aqsacloud/perplexity-web-mcp`) are documented in this file.
+
+## [1.5.0] - 2026-11-17
+
+### Security & Hardening
+- **SSRF Protection (`dist/net-guard.js`)**: Outbound citation verification now enforces strict public-only addressing. Resolves DNS before connection and drops connections to loopback (`127.0.0.0/8`, `::1`), RFC1918 private subnets (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), link-local / cloud metadata endpoints (`169.254.169.254`, `fe80::/10`), carrier-grade NAT, and IPv6 unique local. Custom socket lookup protects against connect-time DNS rebinding (TOCTOU).
+- **Manual Redirect Validation (`dist/verify.js`)**: Switched from `redirect: "follow"` to `redirect: "manual"`. Every redirect hop (up to 5) is parsed, inspected, and validated against the public address policy before following.
+- **Path Traversal Sandboxing (`dist/output.js`)**: Added `OutputPathError`. Restricts all `output_file` writes inside `PERPLEXITY_OUTPUT_DIR` (or `./outputs`). Traversal sequences (`..`), NUL bytes, and symlink escapes are rejected by default. Arbitrary absolute paths outside the outputs folder require explicit opt-in via `PERPLEXITY_ALLOW_ABSOLUTE_OUTPUT=1`.
+- **Targeted Output Pruning (`dist/output.js`)**: `pruneOldOutputs` now only prunes server-generated timestamped `.txt` files matching `OWN_OUTPUT_FILE_PATTERN`, leaving any user-placed or custom files untouched.
+
+### Distribution & First-Run UX
+- **Scoped Package Name**: Rebranded to `@aqsacloud/perplexity-web-mcp` for npm distribution with full repository, bugs, homepage, and provenance metadata in `package.json`.
+- **Interactive Setup CLI (`dist/setup.js`, `dist/cli.js`)**: Added `npx @aqsacloud/perplexity-web-mcp setup --client <client>` supporting **OpenCode**, **Claude Code**, **Cursor**, and **Antigravity**. Automatically checks Node >= 20, verifies/installs Playwright Chromium, safely merges MCP configs with automatic `.bak` backups, and installs the orchestrator skill.
+- **OpenCode V2 Specification**: Fully aligned with OpenCode V2 schema (`mcp.servers.<name>` with `type: "local"`, `command` array, `disabled` semantics, and proper `timeout: { startup: 60000, execution: 960000 }` avoiding false 5s timeouts).
+- **Portable User Data Root (`dist/paths.js`)**: Centralized mutable data storage (browser profiles, cache, outputs) in `~/.perplexity-web-mcp` when installed via npm/npx, preserving login sessions across npm cache wipes while supporting custom overrides via `PERPLEXITY_DATA_DIR`.
+- **Login Ergonomics (`dist/auth.js`)**: Increased interactive login timeout from 5 minutes to 15 minutes (`PERPLEXITY_LOGIN_TIMEOUT_MS`), added clear window title marker (`>>> SIGN IN HERE <<< Perplexity`), returned the profile directory path in the tool result, and provided `scripts/manual-login.mjs`.
+- **Doctor Command (`dist/setup.js`)**: Added `npx @aqsacloud/perplexity-web-mcp doctor [--online]` to quickly verify prerequisites, dependencies, Chromium installation, profile writability, and live session health.
+- **Fixed Skill Schema Mismatch**: Fixed `skills/perplexity-orchestrator/SKILL.md` signature for `health_check({ profile? })`.
+- **CI / GitHub Actions**: Added `.github/workflows/ci.yml` matrix testing across Ubuntu, macOS, and Windows on Node 20, 22, and 24, along with `.github/workflows/release.yml` with provenance publishing.
 
 ## [1.4.0] - 2026-11-17
 

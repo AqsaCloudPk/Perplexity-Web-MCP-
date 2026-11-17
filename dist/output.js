@@ -1,9 +1,8 @@
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
+import { dataPath } from "./paths.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const DEFAULT_OUTPUT_DIR = path.resolve(__dirname, "../outputs");
+export const DEFAULT_OUTPUT_DIR = dataPath("outputs");
 export const DEFAULT_LONG_OUTPUT_CHARS = 15_000;
 export const PREVIEW_CHARS = 2_000;
 const STALE_OUTPUT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
@@ -47,15 +46,69 @@ function buildUniquePath(outputDir, query, suffix = "") {
     return candidate;
 }
 
-function resolveTargetFilePath(outputFile, query, outputDir) {
-    if (outputFile && String(outputFile).trim()) {
-        const trimmed = String(outputFile).trim();
-        const candidate = path.isAbsolute(trimmed)
-            ? path.resolve(trimmed)
-            : path.resolve(outputDir, trimmed);
-        return path.extname(candidate) ? candidate : `${candidate}.txt`;
+/** Error raised when a caller-supplied output_file would escape the configured output directory. */
+export class OutputPathError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = "OutputPathError";
     }
-    return buildUniquePath(outputDir, query);
+}
+
+const SAFE_OUTPUT_EXTENSIONS = new Set([".txt", ".md", ".json"]);
+// Files this server creates: <ISO-timestamp-with-dashes>-<slug>[-partial][-N].txt  (see buildUniquePath).
+const OWN_OUTPUT_FILE_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-.+\.txt$/;
+
+function isTruthyFlag(value) {
+    return /^(1|true|yes|on)$/i.test(String(value ?? "").trim());
+}
+
+function isInsideDir(parent, child) {
+    try {
+        const p = fs.existsSync(parent) ? fs.realpathSync(parent) : path.resolve(parent);
+        const c = fs.existsSync(child) ? fs.realpathSync(child) : path.resolve(child);
+        const rel = path.relative(p, c);
+        return rel !== "" && rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+    }
+    catch {
+        const rel = path.relative(path.resolve(parent), path.resolve(child));
+        return rel !== "" && rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+    }
+}
+
+/**
+ * Resolve the file an explicit `output_file` should be written to.
+ * By default the result is confined to the output directory: absolute paths and `..` escapes are rejected
+ * and unknown extensions get `.txt` appended. Set PERPLEXITY_ALLOW_ABSOLUTE_OUTPUT=1 to opt out.
+ */
+function resolveTargetFilePath(outputFile, query, outputDir, env = process.env) {
+    const raw = outputFile == null ? "" : String(outputFile).trim();
+    if (!raw)
+        return { targetPath: buildUniquePath(outputDir, query), sandboxed: true };
+    if (raw.includes("\0"))
+        throw new OutputPathError("output_file must not contain NUL bytes.");
+    if (isTruthyFlag(env?.PERPLEXITY_ALLOW_ABSOLUTE_OUTPUT)) {
+        const unrestricted = path.resolve(outputDir, raw);
+        return { targetPath: path.extname(unrestricted) ? unrestricted : `${unrestricted}.txt`, sandboxed: false };
+    }
+    const candidate = path.resolve(outputDir, raw);
+    if (!isInsideDir(outputDir, candidate)) {
+        if (path.isAbsolute(raw) || /^[a-zA-Z]:/.test(raw)) {
+            throw new OutputPathError(`output_file must be a relative path inside ${outputDir}. Set PERPLEXITY_ALLOW_ABSOLUTE_OUTPUT=1 to allow absolute paths.`);
+        }
+        throw new OutputPathError(`output_file must stay inside ${outputDir} (path traversal rejected).`);
+    }
+    const ext = path.extname(candidate).toLowerCase();
+    return { targetPath: SAFE_OUTPUT_EXTENSIONS.has(ext) ? candidate : `${candidate}.txt`, sandboxed: true };
+}
+
+/** Defense in depth: after mkdir, make sure symlinks cannot redirect a sandboxed write outside the output dir. */
+function assertRealPathInside(outputDir, targetPath) {
+    const realRoot = fs.realpathSync(outputDir);
+    const realParent = fs.realpathSync(path.dirname(targetPath));
+    if (realParent !== realRoot && !isInsideDir(realRoot, realParent))
+        throw new OutputPathError("output_file resolves outside the output directory via a symbolic link.");
+    if (fs.existsSync(targetPath) && fs.lstatSync(targetPath).isSymbolicLink())
+        throw new OutputPathError("output_file points at a symbolic link; refusing to write through it.");
 }
 
 function buildPreview(text, maxChars) {
@@ -73,7 +126,7 @@ function pruneOldOutputs(outputDir) {
             return;
         const cutoff = Date.now() - STALE_OUTPUT_MAX_AGE_MS;
         for (const entry of fs.readdirSync(outputDir, { withFileTypes: true })) {
-            if (!entry.isFile() || !entry.name.endsWith(".txt"))
+            if (!entry.isFile() || !OWN_OUTPUT_FILE_PATTERN.test(entry.name))
                 continue;
             const fullPath = path.join(outputDir, entry.name);
             const stat = fs.statSync(fullPath);
@@ -249,9 +302,14 @@ export function buildResultMetadata(result, { model = "", outputFile = null, spo
 export function writeTextOutputFile({ fullDocument, query = "", outputFile = "", env = process.env } = {}) {
     const outputDir = resolveOutputDir(env);
     const explicitFile = Boolean(outputFile && String(outputFile).trim());
-    const targetPath = resolveTargetFilePath(outputFile, query, outputDir);
+    let targetPath = explicitFile ? String(outputFile).trim() : "";
     try {
+        const resolved = resolveTargetFilePath(outputFile, query, outputDir, env);
+        targetPath = resolved.targetPath;
+        fs.mkdirSync(outputDir, { recursive: true });
         fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+        if (resolved.sandboxed)
+            assertRealPathInside(outputDir, targetPath);
         fs.writeFileSync(targetPath, fullDocument, "utf8");
         if (!explicitFile) {
             pruneOldOutputs(outputDir);

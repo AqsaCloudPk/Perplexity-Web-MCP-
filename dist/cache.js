@@ -1,10 +1,9 @@
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
+import { dataPath } from "./paths.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const DEFAULT_CACHE_DIR = path.resolve(__dirname, "../cache");
+export const DEFAULT_CACHE_DIR = dataPath("cache");
 export const DEFAULT_CACHE_TTL_SECONDS = 3600;
 const MAX_CACHE_ENTRIES = 300;
 

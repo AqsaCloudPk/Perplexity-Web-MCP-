@@ -1,164 +1,214 @@
-# Perplexity Web Orchestrator (`perplexity-web-mcp`)
+# @aqsacloud/perplexity-web-mcp
 
-Portable MCP stdio server + `perplexity-orchestrator` skill bundle for connecting AI coding agents (**Claude Code**, **Cursor**, **OpenCode**, **Antigravity**, and other MCP clients) to your Perplexity web session via Playwright.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Node: >=20](https://img.shields.io/badge/Node-%3E%3D20-blue.svg)](https://nodejs.org/)
+[![MCP](https://img.shields.io/badge/MCP-FastMCP-purple.svg)](https://modelcontextprotocol.io/)
 
-> **Privacy & Sharing Notice**: This bundle is sanitized — it contains **no** `.playwright/` session cookies, **no** `config.json`, **no** cached/diagnostic/output dumps, and **no** user-specific file paths. `.gitignore` excludes `node_modules/`, `.playwright/`, `cache/`, `diagnostics/`, `outputs/`, `eval-results/`, and `config.json` so it can be shared safely as a Git repo or zip archive.
+A production-hardened Model Context Protocol (MCP) stdio server and orchestration skill that connects AI coding assistants (**OpenCode**, **Claude Code**, **Cursor**, **Antigravity**) with **Perplexity AI**.
 
----
-
-## Included Features
-
-- **7 MCP Tools**: `list_models`, `set_default_model`, `search`, `search_advanced`, `compare_models`, `health_check`, and `login`.
-- **Claim-to-Source Verification (`verify_claims`)**: Pass `verify_claims: true` (or set `PERPLEXITY_VERIFY_CLAIMS=1`) to fetch cited pages, match dates/versions/numbers/names, and tag each claim `supported`, `weak`, or `unverified`.
-- **Multi-Model Comparison (`compare_models`)**: Fan out one prompt across `2–5` models concurrently using `PERPLEXITY_PROFILE_DIRS` browser pool slots (or parallel official API calls) and summarize agreed facts, divergent specifics, and shared citations.
-- **UI Health Check & Failure Snapshots (`health_check`)**: Verify login, Cloudflare clear state, search input, `+`/sources trigger, hydrated model selector, and local dirs in seconds, auto-saving `.html`/`.png`/`.json` debug snapshots under `./diagnostics/` when Perplexity selectors break.
-- **Query Result Cache (`no_cache`)**: Replays repeated non-thread queries within `3600s` (`PERPLEXITY_CACHE_TTL_SECONDS`, `0` disables) instantly from `./cache/`.
-- **Virtualized Long-Thread Follow-Ups**: Correctly detects new follow-up turns even when Perplexity virtualizes old DOM `.prose` nodes (`turnCount` & `virtualizedThread` reported in `Metadata`).
-- **15-Minute Default Timeout (`900s`)**: Long reasoning prompts and Pro models get `900s` by default, configurable per request via `timeout_seconds` (up to `1800s` / 30 min) or globally via `--timeout=<seconds>`.
-- **Non-Intrusive Minimized Browser**: Launches headed Chromium off-screen and minimizes it so interactive browsing stays out of your way while avoiding headless bot blocks.
-- **Clean Lifecycle Management**: Cleans up stale Chromium profile locks on startup and shuts down cleanly on `stdin` close, `SIGINT`, `SIGTERM`, and `SIGHUP`.
-- **Cancellation-Safe & Progress-Aware (`@modelcontextprotocol/sdk`)**: Listens to MCP `notifications/cancelled` (`AbortSignal`), aborts queued/in-flight waits cleanly, emits `notifications/progress` updates every `~5s`, and persists incremental `-partial.txt` checkpoints every `~30s` (or immediately on abort/timeout).
-- **Claim-Level Citation Provenance**: Preserves inline `[1]`, `[2]` citation references inside answers (`data-pplx-citation-url` pills + anchor tags), maps claims to cited URLs (`Claim Provenance` section in `.txt` / compact answers), and hovers top citation cards (`<=1.8s` budget) to recover page titles, snippets, dates, and multi-source links.
-- **Optional Official Agent API Hybrid (`PERPLEXITY_API_KEY`)**: Pass `backend: "api"` (or set `PERPLEXITY_API_KEY` with `backend: "auto"`) to call Perplexity's official `/v1/agent` endpoint directly (`1–5s` latency, official `search_results` snippets/dates, zero UI scraping/ToS exposure) while keeping Playwright Pro browser mode as the zero-extra-cost default.
-- **Structured Typed Errors & Metadata JSON**: Returns typed JSON error payloads (`LOGIN_REQUIRED`, `CLOUDFLARE_CHALLENGE`, `SELECTOR_MISSING`, `MODEL_UNAVAILABLE`, `CANCELLED`, `TIMEOUT`, `INVALID_PARAMS`, `PROFILE_UNAVAILABLE`, `API_ERROR`), extracts up to `50` sources by default (`PERPLEXITY_MAX_SOURCES`) plus downloadable attachment links, and appends a compact `Metadata` JSON line.
-- **Poolable Concurrent Browser Profiles**: Supports `PERPLEXITY_PROFILE_DIRS` (semicolon/comma-separated profile directories) and per-call `profile` arguments (`list_models`, `search`, `search_advanced`, `compare_models`, `health_check`, `login`) with independent per-profile browser contexts and queues so multiple agents/calls can run in parallel.
-- **Long-Output `.txt` File Spooling**: Answers at or above `15000` chars (or any query passed with `output_file`) automatically save to a UTF-8 `.txt` file (`./outputs/` by default) and return a compact preview, counts, sources, and `Thread URL` so coding agents can read large results in slices instead of overflowing context.
-- **Portable Profile Path**: Defaults to `./.playwright/profile` inside this directory, or accepts `PERPLEXITY_PROFILE_DIR` to point each agent or workspace to a specific profile folder.
-- **Cross-Agent Skill + Test/Eval Suite (`npm test`, `npm run eval`)**: Includes `skills/perplexity-orchestrator/SKILL.md` implementing the **Discover -> Research -> Iterate (`thread_url`) -> Compare -> Test -> Adopt** workflow, `node --test` unit/DOM/protocol tests, and an 18-question live evaluation runner.
+Supports multi-model consensus comparisons across Pro models (**GPT-6.1 Sol**, **Claude Sonnet 5.5**, **Gemini 4 Hydrogen**, **Grok 4.7**), active claim-to-source HTTP fact verification, TTL caching, disk output spooling, and an optional official REST API backend.
 
 ---
 
-## Folder Structure
+## ⚡ 60-Second Quickstart
 
-```text
-perplexity-web-orchestrator/
-├── dist/
-│   ├── index.js        # MCP SDK stdio entry point (7 tools, progress, cancellation, typed errors)
-│   ├── browser.js      # Poolable Playwright profile manager, off-screen/minimized handling, cleanup
-│   ├── auth.js         # Cancellation-safe session check & interactive login flow
-│   ├── search.js       # Model/source selection, virtualized-thread detection, health_check, provenance
-│   ├── compare.js      # compare_models multi-model fan-out & consensus analysis
-│   ├── facts.js        # Key-fact extractor (dates, versions, numbers+units, names)
-│   ├── verify.js       # Claim-to-source HTTP verification (supported / weak / unverified)
-│   ├── cache.js        # File-backed TTL query cache
-│   ├── diagnostics.js  # Failure .html/.png/.json snapshot saver
-│   ├── api.js          # Optional Perplexity official /v1/agent REST backend
-│   ├── output.js       # Long-output .txt spooling, Claim Provenance, checkpoints, metadata
-│   └── errors.js       # Typed PerplexityMcpError codes and normalization
-├── eval/
-│   ├── questions.json  # 18 fixed benchmark prompts (coding, documentation, current events)
-│   └── run-eval.js     # Benchmark runner (`npm run eval`)
-├── test/
-│   └── *.test.js       # Unit, DOM, and stdio MCP integration suite (`npm test`)
-├── configs/
-│   ├── claude-code.mcp.json
-│   ├── cursor.mcp.json
-│   ├── opencode.json
-│   └── antigravity.mcp_config.json
-├── skills/
-│   └── perplexity-orchestrator/
-│       └── SKILL.md
-├── CHANGELOG.md
-├── .gitignore
-├── LICENSE            # MIT (upstream quequiere/perplexity-web-mcp)
-├── package.json
-└── README.md
-```
+Requires **Node.js >= 20**.
 
----
-
-## Quick Setup
-
-### 1. Prerequisites (For New Machines / Shared Recipients)
-
-Requires **Node.js >= 20**. Inside the copied directory:
+Run the automated setup command for your editor of choice:
 
 ```bash
-npm install --omit=dev
-npx playwright install chromium
+# For OpenCode (V2 config)
+npx -y @aqsacloud/perplexity-web-mcp setup --client opencode
+
+# For Claude Code
+npx -y @aqsacloud/perplexity-web-mcp setup --client claude
+
+# For Cursor
+npx -y @aqsacloud/perplexity-web-mcp setup --client cursor
+
+# For Antigravity
+npx -y @aqsacloud/perplexity-web-mcp setup --client antigravity
 ```
 
-*(If you are using `G:/perplexity-web-orchestrator` directly on the machine where it was prepared, `node_modules` and Chromium are already installed.)*
+The setup command automatically installs Playwright Chromium, merges the MCP server configuration into your client's config file (creating a timestamped backup first), and installs the `perplexity-orchestrator` skill.
 
----
-
-### 2. First-Time Perplexity Login
-
-The first time any agent calls a `perplexity-web` tool, or when you explicitly run `login`, a Chromium window opens on `https://www.perplexity.ai/` so you can sign in once. Session cookies are stored locally in `.playwright/profile` (git-ignored) unless overridden by `PERPLEXITY_PROFILE_DIR`.
-
----
-
-### 3. Connect Your Coding Agent
-
-Replace `G:/perplexity-web-orchestrator` below if you cloned or moved this folder somewhere else.
-
-#### Claude Code
-- **MCP config**: Copy [`configs/claude-code.mcp.json`](configs/claude-code.mcp.json) into your project's `.mcp.json` or merge the `perplexity-web` entry into `~/.claude.json`, **or** run:
-  ```bash
-  claude mcp add perplexity-web -- node G:/perplexity-web-orchestrator/dist/index.js
-  ```
-- **Skill**: Copy `skills/perplexity-orchestrator/` into:
-  - Global: `~/.claude/skills/perplexity-orchestrator/SKILL.md`
-  - Project: `.claude/skills/perplexity-orchestrator/SKILL.md`
-
-#### Cursor
-- **MCP config**: Merge [`configs/cursor.mcp.json`](configs/cursor.mcp.json) into `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (project).
-- **Skill**: Copy `skills/perplexity-orchestrator/` into `.cursor/skills/perplexity-orchestrator/SKILL.md` (or `~/.cursor/skills/perplexity-orchestrator/SKILL.md`).
-
-#### OpenCode
-- **MCP config**: Merge [`configs/opencode.json`](configs/opencode.json) into `~/.config/opencode/opencode.json` (global) or `./opencode.json` (project).
-- **Skill**: Copy `skills/perplexity-orchestrator/` into:
-  - Global: `~/.config/opencode/skills/perplexity-orchestrator/SKILL.md`
-  - Project: `.opencode/skills/perplexity-orchestrator/SKILL.md`
-
-#### Antigravity
-- **MCP config**: Merge [`configs/antigravity.mcp_config.json`](configs/antigravity.mcp_config.json) into `~/.gemini/config/mcp_config.json`.
-- **Skill**: Copy `skills/perplexity-orchestrator/` into `~/.gemini/config/skills/perplexity-orchestrator/SKILL.md`.
-
----
-
-## Environment Variables & CLI Options
-
-| Option | Default | Description |
-| --- | --- | --- |
-| `--timeout=<seconds>` | `900` (15 min) | CLI flag overriding the default search timeout in `dist/index.js`. |
-| `PERPLEXITY_PROFILE_DIR` | `./.playwright/profile` | Override directory used to store default Chromium profile & Perplexity cookies. |
-| `PERPLEXITY_PROFILE_DIRS` | *(unset)* | Semicolon/comma-separated list of profile directories for automatic concurrent multi-browser pooling. |
-| `PERPLEXITY_PROFILES_ROOT` | `./.playwright/profiles` | Base folder for named `profile` arguments (e.g. `profile: "worker-2"`). |
-| `PERPLEXITY_MAX_SOURCES` | `50` | Maximum cited links extracted per answer (`0` extracts all unique links). |
-| `PERPLEXITY_OUTPUT_DIR` | `./outputs` | Directory where long responses (`>= 15000` chars), checkpoints, and relative `output_file` outputs are saved as `.txt`. |
-| `PERPLEXITY_LONG_OUTPUT_CHARS` | `15000` | Character threshold for automatic `.txt` spooling (`0` disables auto-spooling while still honoring `output_file`). |
-| `PERPLEXITY_HEADLESS` | `"false"` | Set `"true"` for headless Chromium (note: Perplexity/Cloudflare may require headed login first). |
-| `PERPLEXITY_API_KEY` | *(unset)* | Optional official Perplexity API key; enables fast `backend: "api"` (`/v1/agent`) or automatic API routing in `"auto"` mode. |
-| `PERPLEXITY_API_MODEL` | `"sonar"` | Default model ID when using `backend: "api"`. |
-| `PERPLEXITY_API_EFFORT` | `"medium"` | Effort level (`fast`, `low`, `medium`, `high`, `xhigh`) for the `/v1/agent` endpoint. |
-| `PERPLEXITY_BACKEND` | `"auto"` | Default backend policy (`auto`, `browser`, or `api`). |
-| `PERPLEXITY_VERIFY_CLAIMS` | `"false"` | Set `"1"` / `"true"` to verify claims against cited pages by default (or pass per-call `verify_claims`). |
-| `PERPLEXITY_CACHE_TTL_SECONDS` | `3600` | TTL in seconds for repeated non-thread queries (`0` disables caching; pass `no_cache: true` per call). |
-| `PERPLEXITY_CACHE_DIR` | `./cache` | Directory storing cached JSON search responses. |
-| `PERPLEXITY_DIAGNOSTICS_DIR` | `./diagnostics` | Directory storing failure `.html`/`.png`/`.json` snapshots (`max 30` groups). |
-
----
-
-## Testing & Evaluation
+### Sign In Once
 
 ```bash
-npm run check          # Syntax-check all 12 runtime modules + eval script
-npm test               # Run offline unit, headless DOM, and stdio MCP protocol tests
-npm run eval           # Run the 18-question live evaluation benchmark (flags: --limit=N, --category=coding|documentation|current, --model=..., --backend=..., --verify, --timeout=120, --dry-check)
+npx -y @aqsacloud/perplexity-web-mcp login
+```
+
+A dedicated automation browser window titled **`>>> SIGN IN HERE <<< Perplexity`** will open. Sign into your Perplexity account (Free or Pro). Your session cookies are stored securely on your local machine (`~/.perplexity-web-mcp/.playwright/profile`) and reused across restarts.
+
+Verify your installation at any time:
+
+```bash
+npx -y @aqsacloud/perplexity-web-mcp doctor --online
+```
+
+> **Windows PowerShell Note:** If `npx` or `npm` fails with `PSSecurityException (running scripts is disabled)`, use `npx.cmd` / `npm.cmd` instead.
+
+---
+
+## 🛠️ MCP Tools Included
+
+1. **`search`**: Query Perplexity with claim-level `[1]`, `[2]` citation provenance, optional live citation verification (`verify_claims: true`), TTL caching, and automatic long-output disk spooling (`>= 15,000` chars).
+2. **`search_advanced`**: Filter sources across `web`, `academic`, or `social`.
+3. **`compare_models`**: Query 2–5 frontier models concurrently across browser profile pools or parallel API calls, returning agreed facts, divergent specifics, and shared citations.
+4. **`list_models`**: Discover currently available frontier models on your Perplexity tier.
+5. **`set_default_model`**: Set a sticky default model (e.g. `GPT-6.1 Sol`, `Claude Sonnet 5.5`, `Best`).
+6. **`health_check`**: Verify browser launch, Cloudflare status, composer input, and write permissions in ~2 seconds (auto-capturing failure snapshots under `./diagnostics/` if unhealthy).
+7. **`login`**: Verify or trigger interactive authentication for a browser profile.
+
+---
+
+## 💻 Manual Client Configuration
+
+If you prefer configuring your editor manually instead of using `setup`:
+
+### OpenCode (V2 Configuration)
+In `~/.config/opencode/opencode.json` (global) or `./opencode.json` (workspace):
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "perplexity-web": {
+        "type": "local",
+        "command": [
+          "npx",
+          "-y",
+          "@aqsacloud/perplexity-web-mcp@latest"
+        ],
+        "environment": {
+          "PERPLEXITY_HEADLESS": "false"
+        },
+        "timeout": {
+          "startup": 60000,
+          "execution": 960000
+        }
+      }
+    }
+  }
+}
+```
+
+### Claude Code
+Add with the Claude CLI:
+
+```bash
+claude mcp add perplexity-web -- npx -y @aqsacloud/perplexity-web-mcp@latest
+```
+
+Or in your project's `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "perplexity-web": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@aqsacloud/perplexity-web-mcp@latest"],
+      "env": {
+        "PERPLEXITY_HEADLESS": "false"
+      }
+    }
+  }
+}
+```
+
+### Cursor
+In `~/.cursor/mcp.json` or `.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "perplexity-web": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@aqsacloud/perplexity-web-mcp@latest"],
+      "env": {
+        "PERPLEXITY_HEADLESS": "false"
+      }
+    }
+  }
+}
+```
+
+### Antigravity
+In `~/.gemini/config/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "perplexity-web": {
+      "command": "cmd.exe",
+      "args": ["/c", "npx", "-y", "@aqsacloud/perplexity-web-mcp@latest"],
+      "env": {
+        "PERPLEXITY_HEADLESS": "false"
+      }
+    }
+  }
+}
 ```
 
 ---
 
-## Running Multiple Agents Safely
+## 🔒 Security & Sandboxing
 
-Chromium locks a profile directory so **only one active browser process can use a given `PERPLEXITY_PROFILE_DIR` at a time**.
+`@aqsacloud/perplexity-web-mcp` is hardened against untrusted web inputs and malicious prompts:
 
-- **Option A (Simplest):** Point all agents at `G:/perplexity-web-orchestrator`, log in once, and run Perplexity queries from one active agent session at a time.
-- **Option B (Parallel agents):** Give a second agent its own `PERPLEXITY_PROFILE_DIR` in its MCP `env` block (e.g., `G:/perplexity-profiles/claude-code`) and run `login` once for that agent.
+- **SSRF Protection (`dist/net-guard.js`)**: Outbound citation verification (`verify_claims`) checks every destination before connection. It rejects loopback (`127.0.0.1`, `::1`), private networks (`10.0.0.0/8`, `192.168.0.0/16`, `172.16.0.0/12`), link-local / cloud metadata endpoints (`169.254.169.254`, `fe80::/10`), and validates all redirect hops manually. Connect-time DNS re-validation defeats DNS-rebinding attacks.
+- **Path Traversal Sandboxing (`dist/output.js`)**: The `output_file` parameter restricts file writes strictly inside `PERPLEXITY_OUTPUT_DIR` (or `./outputs`). Traversal sequences (`..`), NUL bytes, and symlink breakouts throw `OutputPathError`. Writing to arbitrary absolute paths requires explicit opt-in (`PERPLEXITY_ALLOW_ABSOLUTE_OUTPUT=1`).
+- **Pruning Safety**: Stale output cleanup only prunes server-generated timestamped `.txt` files, never user-placed files.
+
+For details, see [SECURITY.md](SECURITY.md).
 
 ---
 
-## License & Attribution
+## ❓ Troubleshooting & FAQ
 
-Licensed under the [MIT License](LICENSE). Built on top of [`perplexity-web-mcp`](https://github.com/quequiere/perplexity-web-mcp) by `quequiere`.
+### "I signed into my personal Chrome/Edge, but the tool still says unauthenticated"
+Perplexity sessions in your everyday Chrome or Edge are **not** shared with the MCP server. Playwright runs in an isolated automation browser profile (`~/.perplexity-web-mcp/.playwright/profile`) so it doesn't interfere with your personal browsing.
+
+You must run the login command:
+```bash
+npx -y @aqsacloud/perplexity-web-mcp login
+```
+and sign into the window that opens with the title **`>>> SIGN IN HERE <<< Perplexity`**.
+
+### "Why does a browser window open during searches?"
+Perplexity uses Cloudflare Turnstile bot detection which blocks headless Chromium instances. To ensure searches never get blocked, the server launches a visible Chromium window off-screen or minimized.
+
+### "How do I use the official API instead of browser automation?"
+Set your official Perplexity API key:
+```bash
+export PERPLEXITY_API_KEY="pplx-xxxxxxxxxxxxxxxx"
+```
+The server will automatically route queries to the official Perplexity Agent API (`/v1/agent`), providing sub-second latency with zero UI automation or Cloudflare involvement.
+
+---
+
+## ⚙️ Environment Variables
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `PERPLEXITY_DATA_DIR` | `~/.perplexity-web-mcp` | Directory for browser profiles, cache, and outputs when installed via npm/npx. |
+| `PERPLEXITY_API_KEY` | *(unset)* | Enables official Perplexity REST API backend (`/v1/agent`). |
+| `PERPLEXITY_BACKEND` | `"auto"` | Execution backend (`"auto"`, `"browser"`, or `"api"`). |
+| `PERPLEXITY_OUTPUT_DIR` | `./outputs` | Directory where answers $\ge 15,000$ chars are spooled to `.txt`. |
+| `PERPLEXITY_ALLOW_ABSOLUTE_OUTPUT` | `"0"` | Set to `"1"` to allow `output_file` to write outside the outputs directory. |
+| `PERPLEXITY_LOGIN_TIMEOUT_MS` | `900000` (15m) | Maximum wait time for interactive login. |
+| `PERPLEXITY_CACHE_TTL_SECONDS` | `3600` (1h) | TTL for repeated query caching (`0` disables). |
+| `PERPLEXITY_VERIFY_CLAIMS` | `"0"` | Set to `"1"` to enable claim verification by default. |
+
+---
+
+## ⚖️ Disclaimer
+
+This is an **unofficial community project** and is not affiliated with, endorsed by, or sponsored by Perplexity AI, Inc. Use responsibly and in accordance with Perplexity's Terms of Service. For enterprise deployments, use the official API backend (`PERPLEXITY_API_KEY`).
+
+## 📄 License
+
+MIT License. See [LICENSE](LICENSE) for details.

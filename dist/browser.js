@@ -2,12 +2,11 @@ import { chromium } from "playwright";
 import { execFileSync } from "child_process";
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
 import { ErrorCode, PerplexityMcpError } from "./errors.js";
+import { dataPath } from "./paths.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_PROFILE_DIR = path.resolve(__dirname, "../.playwright/profile");
-const DEFAULT_PROFILES_ROOT = path.resolve(__dirname, "../.playwright/profiles");
+const DEFAULT_PROFILE_DIR = dataPath(".playwright", "profile");
+const DEFAULT_PROFILES_ROOT = dataPath(".playwright", "profiles");
 const HEADLESS_MODE = /^(1|true|yes)$/i.test(process.env.PERPLEXITY_HEADLESS ?? "");
 
 const slots = new Map();

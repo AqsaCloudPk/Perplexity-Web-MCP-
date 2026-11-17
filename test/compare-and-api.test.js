@@ -117,7 +117,7 @@ describe("compare.js", () => {
         const tmpOut = fs.mkdtempSync(path.join(os.tmpdir(), "pplx-cmp-"));
         tmpRoots.push(tmpOut);
         const target = path.join(tmpOut, "cmp.txt");
-        const spooled = formatComparison(comparison, { outputFile: target, env: { PERPLEXITY_LONG_OUTPUT_CHARS: "50000" } });
+        const spooled = formatComparison(comparison, { outputFile: target, env: { PERPLEXITY_LONG_OUTPUT_CHARS: "50000", PERPLEXITY_ALLOW_ABSOLUTE_OUTPUT: "1" } });
         assert.match(spooled, /\[Comparison saved to file\]/);
         assert.match(spooled, /"spooled":true/);
         assert.match(fs.readFileSync(target, "utf8"), /# Perplexity Multi-Model Comparison/);

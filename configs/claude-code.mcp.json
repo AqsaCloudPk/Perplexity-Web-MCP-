@@ -2,9 +2,10 @@
   "mcpServers": {
     "perplexity-web": {
       "type": "stdio",
-      "command": "node",
+      "command": "npx",
       "args": [
-        "G:/perplexity-web-orchestrator/dist/index.js"
+        "-y",
+        "@aqsacloud/perplexity-web-mcp@latest"
       ],
       "env": {
         "PERPLEXITY_HEADLESS": "false"

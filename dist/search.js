@@ -1,6 +1,5 @@
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
 import { resolveExecutionBackend, runApiSearch } from "./api.js";
 import { checkSession } from "./auth.js";
 import { ensureBrowser, newSearchPage, runWithProfileSlot } from "./browser.js";
@@ -9,9 +8,9 @@ import { resolveDiagnosticsDir, saveDiagnosticSnapshot } from "./diagnostics.js"
 import { ErrorCode, PerplexityMcpError } from "./errors.js";
 import { writeCheckpoint, removeCheckpoint, resolveOutputDir } from "./output.js";
 import { resolveVerifyDefault, verifyClaims } from "./verify.js";
+import { dataPath } from "./paths.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const CONFIG_PATH = path.resolve(__dirname, "../config.json");
+const CONFIG_PATH = dataPath("config.json");
 const PERPLEXITY_HOME = "https://www.perplexity.ai/";
 export const DEFAULT_TIMEOUT_MS = 900_000;
 export const DEFAULT_MAX_SOURCES = 50;

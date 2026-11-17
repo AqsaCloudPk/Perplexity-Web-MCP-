@@ -1,11 +1,13 @@
 import { contentWords, extractKeyFacts, factMatches, normalizeText } from "./facts.js";
+import { assertPublicHost, BLOCKED_ADDRESS_CODE, parsePublicUrl, safeFetch } from "./net-guard.js";
 
 const DEFAULT_PAGE_TIMEOUT_MS = 8_000;
 const DEFAULT_TOTAL_BUDGET_MS = 25_000;
 const DEFAULT_MAX_PAGES = 8;
 const DEFAULT_MAX_CLAIMS = 25;
 const MAX_BODY_BYTES = 3 * 1024 * 1024;
-const USER_AGENT = "perplexity-web-mcp/1.4 (claim-verification; +https://github.com/quequiere/perplexity-web-mcp)";
+const MAX_REDIRECTS = 5;
+const USER_AGENT = "perplexity-web-mcp (claim-verification; +https://github.com/AqsaCloudPk/Perplexity-Web-MCP-)";
 
 const ENTITY_MAP = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", ndash: "-", mdash: "-", rsquo: "'", lsquo: "'", rdquo: '"', ldquo: '"', hellip: "..." };
 
@@ -69,22 +71,45 @@ async function readBodyLimited(response, maxBytes) {
     return new TextDecoder("utf-8", { fatal: false }).decode(buf);
 }
 
-/** Fetch a cited page and return normalized plain text, or a structured failure reason. */
-export async function fetchPageText(url, { timeoutMs = DEFAULT_PAGE_TIMEOUT_MS, signal, fetchImpl = fetch } = {}) {
+/**
+ * Fetch a cited page and return normalized plain text, or a structured failure reason.
+ *
+ * SSRF-hardened: only public http(s) destinations are contacted, redirects are followed manually
+ * (max `maxRedirects`) and every hop is re-validated. `lookupImpl` / `fetchImpl` are injectable for tests.
+ */
+export async function fetchPageText(url, { timeoutMs = DEFAULT_PAGE_TIMEOUT_MS, signal, fetchImpl = safeFetch, lookupImpl, maxRedirects = MAX_REDIRECTS } = {}) {
     const startedAt = Date.now();
     const timeoutSignal = AbortSignal.timeout(timeoutMs);
     const combined = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+    const fail = (reason, extra = {}) => ({ url, ok: false, status: null, reason, ms: Date.now() - startedAt, ...extra });
     try {
-        const response = await fetchImpl(url, {
-            method: "GET",
-            redirect: "follow",
-            signal: combined,
-            headers: {
-                "User-Agent": USER_AGENT,
-                Accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5",
-                "Accept-Language": "en-US,en;q=0.8",
-            },
-        });
+        let current = url;
+        let response;
+        for (let hop = 0;; hop++) {
+            const parsed = parsePublicUrl(current);
+            if (!parsed.ok)
+                return fail(parsed.reason);
+            if (lookupImpl || fetchImpl === safeFetch) {
+                await assertPublicHost(parsed.host, lookupImpl);
+            }
+            response = await fetchImpl(parsed.url.href, {
+                method: "GET",
+                redirect: "manual",
+                signal: combined,
+                headers: {
+                    "User-Agent": USER_AGENT,
+                    Accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5",
+                    "Accept-Language": "en-US,en;q=0.8",
+                },
+            });
+            const location = response.status >= 300 && response.status < 400 ? response.headers.get("location") : null;
+            if (!location)
+                break;
+            await response.body?.cancel?.().catch(() => { });
+            if (hop >= maxRedirects)
+                return fail("too_many_redirects", { status: response.status });
+            current = new URL(location, parsed.url).href;
+        }
         if (!response.ok) {
             return { url, ok: false, status: response.status, reason: response.status === 403 || response.status === 429 ? "blocked" : "http_error", ms: Date.now() - startedAt };
         }
@@ -102,13 +127,9 @@ export async function fetchPageText(url, { timeoutMs = DEFAULT_PAGE_TIMEOUT_MS, 
     }
     catch (err) {
         const aborted = signal?.aborted;
-        return {
-            url,
-            ok: false,
-            status: null,
-            reason: aborted ? "cancelled" : (timeoutSignal.aborted || err?.name === "TimeoutError" ? "timeout" : "network_error"),
-            ms: Date.now() - startedAt,
-        };
+        if (err?.code === BLOCKED_ADDRESS_CODE)
+            return fail("blocked_address");
+        return fail(aborted ? "cancelled" : (timeoutSignal.aborted || err?.name === "TimeoutError" ? "timeout" : "network_error"));
     }
 }
 
@@ -186,7 +207,7 @@ export function classifyClaim(claim, pageResults) {
  * Verify claim-level citations by fetching cited pages and checking each claim's key facts.
  * Returns annotated claims plus a summary; never throws (failures become "unverified").
  */
-export async function verifyClaims(claims, { maxClaims = DEFAULT_MAX_CLAIMS, maxPages = DEFAULT_MAX_PAGES, pageTimeoutMs = DEFAULT_PAGE_TIMEOUT_MS, totalBudgetMs = DEFAULT_TOTAL_BUDGET_MS, concurrency = 4, signal, fetchImpl = fetch, onProgress } = {}) {
+export async function verifyClaims(claims, { maxClaims = DEFAULT_MAX_CLAIMS, maxPages = DEFAULT_MAX_PAGES, pageTimeoutMs = DEFAULT_PAGE_TIMEOUT_MS, totalBudgetMs = DEFAULT_TOTAL_BUDGET_MS, concurrency = 4, signal, fetchImpl = safeFetch, lookupImpl, onProgress } = {}) {
     const startedAt = Date.now();
     const list = Array.isArray(claims) ? claims.slice(0, maxClaims) : [];
     const urlFreq = new Map();
@@ -206,7 +227,7 @@ export async function verifyClaims(claims, { maxClaims = DEFAULT_MAX_CLAIMS, max
 
     const budgetSignal = AbortSignal.timeout(totalBudgetMs);
     const combined = signal ? AbortSignal.any([signal, budgetSignal]) : budgetSignal;
-    const fetched = await runLimited(urls, concurrency, (u) => fetchPageText(u, { timeoutMs: pageTimeoutMs, signal: combined, fetchImpl }));
+    const fetched = await runLimited(urls, concurrency, (u) => fetchPageText(u, { timeoutMs: pageTimeoutMs, signal: combined, fetchImpl, lookupImpl }));
     const pageResults = new Map(fetched.map((p) => [p.url, p]));
 
     const annotated = (Array.isArray(claims) ? claims : []).map((c, idx) => {

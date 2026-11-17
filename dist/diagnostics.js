@@ -1,9 +1,8 @@
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
+import { dataPath } from "./paths.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const DEFAULT_DIAGNOSTICS_DIR = path.resolve(__dirname, "../diagnostics");
+export const DEFAULT_DIAGNOSTICS_DIR = dataPath("diagnostics");
 const MAX_SNAPSHOT_GROUPS = 30;
 const MAX_HTML_BYTES = 5 * 1024 * 1024;
 

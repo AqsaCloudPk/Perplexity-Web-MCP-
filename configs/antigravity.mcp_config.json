@@ -1,9 +1,12 @@
 {
   "mcpServers": {
     "perplexity-web": {
-      "command": "node",
+      "command": "cmd.exe",
       "args": [
-        "G:/perplexity-web-orchestrator/dist/index.js"
+        "/c",
+        "npx",
+        "-y",
+        "@aqsacloud/perplexity-web-mcp@latest"
       ],
       "env": {
         "PERPLEXITY_HEADLESS": "false"

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import fs from "node:fs";
 import { z } from "zod";
 import { ensureAuthenticated } from "./auth.js";
 import { closeBrowser, ensurePoolInitialized, getPoolStatus } from "./browser.js";
@@ -10,6 +11,15 @@ import { normalizeError } from "./errors.js";
 import { formatResult } from "./output.js";
 import { search, searchWithSources, listModels, setDefaultModel, healthCheck, DEFAULT_TIMEOUT_MS } from "./search.js";
 import { resolveVerifyDefault } from "./verify.js";
+
+const PKG_VERSION = (() => {
+    try {
+        return JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version ?? "0.0.0";
+    }
+    catch {
+        return "0.0.0";
+    }
+})();
 
 // --- CLI args ---
 const args = process.argv.slice(2);
@@ -97,7 +107,7 @@ ensurePoolInitialized();
 
 const server = new McpServer({
     name: "perplexity-web",
-    version: "1.4.0",
+    version: PKG_VERSION,
 });
 
 server.registerTool(
@@ -310,8 +320,8 @@ server.registerTool(
     wrapTool("login", async ({ profile }, extra) => {
         const res = await ensureAuthenticated({ profile, signal: extra?.signal });
         const msg = res.alreadyAuthenticated
-            ? `Already authenticated on Perplexity.ai (profile "${res.profile}").`
-            : `Login successful. You are now authenticated on Perplexity.ai (profile "${res.profile}").`;
+            ? `Already authenticated on Perplexity.ai (profile "${res.profile}", profile dir: ${res.profileDir}).`
+            : `Login successful. You are now authenticated on Perplexity.ai (profile "${res.profile}", profile dir: ${res.profileDir}).`;
         return textResult(`${msg}\n\nMetadata: ${JSON.stringify({ ok: true, ...res })}`);
     })
 );
@@ -335,7 +345,7 @@ process.stdin.on("end", () => void shutdown(0));
 // --- Startup ---
 async function main() {
     const pool = getPoolStatus();
-    console.error(`[perplexity-web-mcp] Starting v1.4.0 (timeout=${TIMEOUT_MS}ms, cacheTtl=${resolveCacheTtlSeconds()}s, verifyDefault=${resolveVerifyDefault()}, pool=${pool.map((p) => p.id).join(",")}, apiKey=${process.env.PERPLEXITY_API_KEY ? "configured" : "unset"})...`);
+    console.error(`[perplexity-web-mcp] Starting v${PKG_VERSION} (timeout=${TIMEOUT_MS}ms, cacheTtl=${resolveCacheTtlSeconds()}s, verifyDefault=${resolveVerifyDefault()}, pool=${pool.map((p) => p.id).join(",")}, apiKey=${process.env.PERPLEXITY_API_KEY ? "configured" : "unset"})...`);
     console.error("[perplexity-web-mcp] Ready. Browser will launch on first tool call.");
     const transport = new StdioServerTransport();
     await server.connect(transport);

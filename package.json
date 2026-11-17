@@ -1,18 +1,31 @@
 {
-  "name": "perplexity-web-mcp",
-  "version": "1.4.0",
-  "description": "Portable stdio MCP server and multi-agent orchestrator skill for Perplexity AI Pro via Playwright.",
+  "name": "@aqsacloud/perplexity-web-mcp",
+  "version": "1.5.0",
+  "description": "MCP server and orchestrator skill for Perplexity (Pro) via Playwright: multi-model comparison, claim verification, caching, and an optional official-API backend. Unofficial.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "perplexity-web-mcp": "dist/index.js"
+    "perplexity-web-mcp": "dist/cli.js"
   },
+  "files": [
+    "dist",
+    "skills",
+    "configs",
+    "scripts",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "SECURITY.md"
+  ],
   "scripts": {
     "start": "node dist/index.js",
     "install-browser": "npx playwright install chromium",
-    "check": "node --check dist/index.js && node --check dist/browser.js && node --check dist/auth.js && node --check dist/search.js && node --check dist/output.js && node --check dist/errors.js && node --check dist/api.js && node --check dist/facts.js && node --check dist/verify.js && node --check dist/cache.js && node --check dist/diagnostics.js && node --check dist/compare.js && node --check eval/run-eval.js",
+    "check": "node scripts/check.mjs",
     "test": "node --test test/*.test.js",
-    "eval": "node eval/run-eval.js"
+    "coverage": "node --test --experimental-test-coverage test/*.test.js",
+    "eval": "node eval/run-eval.js",
+    "login": "node scripts/manual-login.mjs",
+    "doctor": "node dist/cli.js doctor"
   },
   "engines": {
     "node": ">=20.0.0"
@@ -23,6 +36,28 @@
     "playwright": "^1.58.2",
     "zod": "^4.3.6"
   },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "perplexity",
+    "playwright",
+    "opencode",
+    "claude-code",
+    "cursor",
+    "research"
+  ],
   "license": "MIT",
-  "author": "quequiere"
+  "author": "AqsaCloudPk (original perplexity-web-mcp by quequiere)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AqsaCloudPk/Perplexity-Web-MCP-.git"
+  },
+  "homepage": "https://github.com/AqsaCloudPk/Perplexity-Web-MCP-#readme",
+  "bugs": {
+    "url": "https://github.com/AqsaCloudPk/Perplexity-Web-MCP-/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
 }

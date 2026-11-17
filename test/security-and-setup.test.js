@@ -205,10 +205,17 @@ describe("setup CLI & config ergonomics", () => {
     });
 
     it("parseArgs correctly handles flags with and without values", () => {
-        const parsed = parseArgs(["--client", "opencode", "--dry-run", "--mode=npx", "--skip-browser"]);
+        const parsed = parseArgs(["--client", "opencode", "--dry-run", "--mode=npx", "--skip-browser", "--print"]);
         assert.equal(parsed.client, "opencode");
         assert.equal(parsed["dry-run"], true);
         assert.equal(parsed.mode, "npx");
         assert.equal(parsed["skip-browser"], true);
+        assert.equal(parsed.print, true);
+    });
+
+    it("buildServerSpec isolates profile per client and pins version", () => {
+        const spec = buildServerSpec({ mode: "npx", client: "cursor" });
+        assert.ok(spec.env.PERPLEXITY_PROFILE_DIR.includes("cursor"));
+        assert.ok(spec.args.some((arg) => /@\^1\.\d+/.test(arg)));
     });
 });

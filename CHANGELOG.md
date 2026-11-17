@@ -2,6 +2,22 @@
 
 All notable changes to `perplexity-web-orchestrator` (`@aqsacloud/perplexity-web-mcp`) are documented in this file.
 
+## [1.5.1] - 2026-11-17
+
+### Reliability & Process Isolation
+- **Per-Client Profile Isolation (`dist/setup.js`)**: `setup --client <name>` automatically configures `PERPLEXITY_PROFILE_DIR` to `~/.perplexity-web-mcp/profiles/<client>/`, allowing simultaneous execution of multiple clients (e.g. OpenCode + Cursor + Claude Code) without Chromium profile lock contention.
+- **Safer Process Cleanup Gate (`dist/browser.js`)**: Force-killing orphaned Chrome processes is now gated behind `PERPLEXITY_FORCE_CLEANUP=1` to prevent one MCP server from terminating another client's live browser session. Without this flag, stale lockfiles are safely removed and a warning is logged.
+- **Headless Default (`dist/browser.js`)**: The browser now defaults to headless mode (`PERPLEXITY_HEADLESS` defaults to true), avoiding unnecessary popup windows while remaining configurable via `PERPLEXITY_HEADLESS=false`.
+- **Playwright Chromium in CI (`.github/workflows/ci.yml`, `release.yml`)**: Added automated Playwright Chromium installation and Linux OS dependency installation to GitHub Actions workflows.
+- **Synchronized Lockfile (`package-lock.json`)**: Resolved root dependencies, aligned package name and binary specifiers, and harmonized `jose` version requirements.
+
+### Tool & Protocol Enhancements
+- **MCP Prompts (`dist/index.js`)**: Registered standard MCP prompts (`research`, `regression_research`) allowing seamless invocation from prompt-capable MCP clients without manual tool chaining.
+- **Tool Metadata & Annotations (`dist/index.js`)**: Added explicit titles and protocol annotations (`readOnlyHint`, `openWorldHint`, `destructiveHint`) across all 7 registered tools for better permissions handling in Claude Code, Cursor, and VS Code.
+- **Generic MCP Config Snippet (`dist/setup.js`)**: Added `npx @aqsacloud/perplexity-web-mcp setup --print` to emit generic JSON configurations for any MCP client (Codex, Gemini CLI, VS Code, Windsurf, Cline/Roo, Zed, Continue).
+- **Version Pinning**: Client configurations now pin dependencies to `@^1.5` instead of `@latest` for stability across client restarts.
+- **Documentation & Path Alignment**: Corrected diagnostic snapshot paths (`~/.perplexity-web-mcp/diagnostics/`) and clarified single-profile sequential vs pool-concurrent execution in `compare_models`.
+
 ## [1.5.0] - 2026-11-17
 
 ### Security & Hardening

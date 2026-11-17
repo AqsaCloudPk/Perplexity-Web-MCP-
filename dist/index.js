@@ -110,10 +110,43 @@ const server = new McpServer({
     version: PKG_VERSION,
 });
 
+// --- MCP Prompts ---
+server.prompt(
+    "research",
+    "Research a topic via Perplexity and return a summary with cited sources.",
+    { query: z.string().describe("The research question or topic") },
+    ({ query }) => ({
+        messages: [{
+            role: "user",
+            content: {
+                type: "text",
+                text: `Use the perplexity-web "search" tool to research the following topic. Include all cited sources in your answer.\n\nQuery: ${query}`,
+            },
+        }],
+    })
+);
+
+server.prompt(
+    "regression_research",
+    "Compare answers from multiple Perplexity AI models to find consensus and divergence on a topic.",
+    { query: z.string().describe("The question to compare across models") },
+    ({ query }) => ({
+        messages: [{
+            role: "user",
+            content: {
+                type: "text",
+                text: `Use the perplexity-web "compare_models" tool with verify_claims: true to compare answers across models for the following question. Highlight agreed facts, single-model specifics, and any unverified claims.\n\nQuery: ${query}`,
+            },
+        }],
+    })
+);
+
 server.registerTool(
     "list_models",
     {
+        title: "List Perplexity Models",
         description: "List the AI models available on your Perplexity.ai account (excluding unavailable Max-tier models), active and saved default model, and configured browser profile pool status.",
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
         inputSchema: {
             profile: profileSchema,
         },
@@ -152,7 +185,9 @@ server.registerTool(
 server.registerTool(
     "set_default_model",
     {
+        title: "Set Default Model",
         description: "Set or clear your sticky default Perplexity model (persisted locally). Used automatically by search/search_advanced whenever no model argument is passed.",
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         inputSchema: {
             model: z.string().describe("Model name to set as default (e.g. 'GPT-6.1 Sol', 'Grok 4.7', 'Claude Sonnet 5.5', 'Best'), or 'none' to clear."),
             profile: profileSchema,
@@ -170,7 +205,9 @@ server.registerTool(
 server.registerTool(
     "search",
     {
+        title: "Search Perplexity",
         description: "Search the web using Perplexity.ai with claim-level citation provenance ([1] markers, snippets, dates), optional live claim-source verification (supported/weak/unverified), local caching, cancellation-safe streaming, progress notifications, partial .txt checkpoints, typed error JSON, poolable browser profiles, and optional official Agent API backend. Supports model, thread_url, timeout_seconds (default 900s / max 1800s), profile, backend, verify_claims, no_cache, and output_file / auto .txt spooling (>= 15000 chars).",
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
         inputSchema: {
             query: z.string().describe("The search query or follow-up question"),
             model: z
@@ -206,7 +243,9 @@ server.registerTool(
 server.registerTool(
     "search_advanced",
     {
+        title: "Advanced Perplexity Search",
         description: "Search Perplexity.ai with specific source selection (web, academic, social), claim-level citation provenance ([1] markers, snippets, dates), optional live claim-source verification, local caching, cancellation-safe streaming, progress notifications, partial .txt checkpoints, typed error JSON, poolable browser profiles, and optional official Agent API backend.",
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
         inputSchema: {
             query: z.string().describe("The search query"),
             sources: z
@@ -246,7 +285,9 @@ server.registerTool(
 server.registerTool(
     "compare_models",
     {
-        description: "Ask one question across 2–5 Perplexity models (running concurrently when multiple PERPLEXITY_PROFILE_DIRS profiles or backend='api' are configured), compare shared citations and agreed/divergent key facts, and return a consolidated Markdown report (spooled to .txt if >= 15000 chars or output_file is set).",
+        title: "Compare Perplexity Models",
+        description: "Ask one question across 2–5 Perplexity models (running concurrently when multiple PERPLEXITY_PROFILE_DIRS profiles or backend='api' are configured; sequential with a single profile), compare shared citations and agreed/divergent key facts, and return a consolidated Markdown report (spooled to .txt if >= 15000 chars or output_file is set).",
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
         inputSchema: {
             query: z.string().describe("Question or architecture/code comparison prompt to send to each model"),
             models: z
@@ -286,7 +327,9 @@ server.registerTool(
 server.registerTool(
     "health_check",
     {
+        title: "Health Check",
         description: "Quick (~5s) diagnostic check verifying Perplexity authentication, absence of Cloudflare blocks, composer search input, add/sources trigger, model selector hydration, and writable local directories. Saves a diagnostic HTML+PNG snapshot automatically if any check fails.",
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
         inputSchema: {
             profile: profileSchema,
         },
@@ -312,7 +355,9 @@ server.registerTool(
 server.registerTool(
     "login",
     {
+        title: "Login to Perplexity",
         description: "Check if you are authenticated on Perplexity.ai for the default or specified browser profile. If not, opens a visible browser window so you can log in once.",
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
         inputSchema: {
             profile: profileSchema,
         },

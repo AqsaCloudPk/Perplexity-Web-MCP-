@@ -7,11 +7,9 @@
         "command": [
           "npx",
           "-y",
-          "@aqsacloud/perplexity-web-mcp@latest"
+          "@aqsacloud/perplexity-web-mcp@^1.5"
         ],
-        "environment": {
-          "PERPLEXITY_HEADLESS": "false"
-        },
+        "environment": {},
         "timeout": {
           "startup": 60000,
           "execution": 960000

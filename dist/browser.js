@@ -7,7 +7,7 @@ import { dataPath } from "./paths.js";
 
 const DEFAULT_PROFILE_DIR = dataPath(".playwright", "profile");
 const DEFAULT_PROFILES_ROOT = dataPath(".playwright", "profiles");
-const HEADLESS_MODE = /^(1|true|yes)$/i.test(process.env.PERPLEXITY_HEADLESS ?? "");
+const HEADLESS_MODE = !/^(0|false|no)$/i.test(process.env.PERPLEXITY_HEADLESS ?? "true");
 
 const slots = new Map();
 let poolInitialized = false;
@@ -139,7 +139,8 @@ function checkChromiumInstalled() {
 }
 
 function cleanupOrphanedProfileBrowsers(profileDir) {
-    if (process.platform === "win32") {
+    const forceCleanup = /^(1|true|yes)$/i.test(process.env.PERPLEXITY_FORCE_CLEANUP ?? "");
+    if (process.platform === "win32" && forceCleanup) {
         try {
             // Stop only Playwright Chrome instances explicitly bound to this MCP profile dir
             execFileSync("powershell.exe", [
@@ -155,6 +156,9 @@ function cleanupOrphanedProfileBrowsers(profileDir) {
         catch {
             // Ignore cleanup failure; fallback lock removal below will still run if stale
         }
+    }
+    else if (process.platform === "win32" && !forceCleanup) {
+        console.error(`[perplexity-web-mcp] Another browser may be using profile "${profileDir}". Set PERPLEXITY_FORCE_CLEANUP=1 to kill it, or close the other MCP client first.`);
     }
     for (const lockName of ["SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile"]) {
         try {

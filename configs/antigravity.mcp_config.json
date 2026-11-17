@@ -6,11 +6,9 @@
         "/c",
         "npx",
         "-y",
-        "@aqsacloud/perplexity-web-mcp@latest"
+        "@aqsacloud/perplexity-web-mcp@^1.5"
       ],
-      "env": {
-        "PERPLEXITY_HEADLESS": "false"
-      }
+      "env": {}
     }
   }
 }

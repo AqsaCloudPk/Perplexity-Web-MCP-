@@ -21,7 +21,7 @@ export const SKILL_NAME = "perplexity-orchestrator";
 export const CLIENTS = ["opencode", "claude", "cursor", "antigravity"];
 const OPENCODE_SCHEMA_URL = "https://opencode.ai/config.json";
 const OPENCODE_EXECUTION_TIMEOUT_MS = 960_000; // slightly above the server's 900s default search timeout
-const BOOLEAN_FLAGS = new Set(["dry-run", "project", "force", "skip-browser", "skip-deps", "no-skill", "absolute-node", "help", "online"]);
+const BOOLEAN_FLAGS = new Set(["dry-run", "project", "force", "skip-browser", "skip-deps", "no-skill", "absolute-node", "help", "online", "print"]);
 
 const out = (line = "") => console.log(line);
 const ok = (line) => out(`[ok]   ${line}`);
@@ -66,12 +66,17 @@ export function resolveMode(opts = {}) {
     return isInstalledPackage() ? "npx" : "node";
 }
 
-export function buildServerSpec({ mode, platform = process.platform, absoluteNode = false, entry = path.join(packageDir(), "dist", "index.js") } = {}) {
-    const env = { PERPLEXITY_HEADLESS: "false" };
+export function buildServerSpec({ mode, platform = process.platform, absoluteNode = false, entry = path.join(packageDir(), "dist", "index.js"), client = null } = {}) {
+    const env = {};
+    if (client) {
+        const dataRoot = resolveDataRoot();
+        env.PERPLEXITY_PROFILE_DIR = path.join(dataRoot, "profiles", client);
+    }
+    const versionPin = `@^${PKG.version.split(".").slice(0, 2).join(".")}`;
     if (mode === "npx") {
         return platform === "win32"
-            ? { command: "cmd.exe", args: ["/c", "npx", "-y", `${PKG.name}@latest`], env }
-            : { command: "npx", args: ["-y", `${PKG.name}@latest`], env };
+            ? { command: "cmd.exe", args: ["/c", "npx", "-y", `${PKG.name}${versionPin}`], env }
+            : { command: "npx", args: ["-y", `${PKG.name}${versionPin}`], env };
     }
     return { command: absoluteNode ? process.execPath : "node", args: [entry], env };
 }
@@ -295,15 +300,30 @@ setup options:
   --force            Overwrite an existing, different copy of the skill
   --skip-deps        Skip 'npm install --omit=dev' (clone installs only)
   --skip-browser     Skip downloading Playwright Chromium
+  --print            Print a generic MCP server JSON snippet to stdout without writing any files
 
 Windows PowerShell: if 'npx' is blocked by the execution policy (npx.ps1), use 'npx.cmd' or cmd.exe.`);
 }
 
 async function runSetup(opts) {
-    if (opts.help || !opts.client) {
+    if (opts.help || (!opts.client && !opts.print)) {
         printSetupHelp();
         return opts.help ? 0 : 2;
     }
+
+    // --print mode: output a generic JSON snippet to stdout and exit
+    if (opts.print) {
+        const mode = resolveMode(opts);
+        const spec = buildServerSpec({ mode, absoluteNode: Boolean(opts["absolute-node"]) });
+        const snippet = {
+            command: spec.command,
+            args: spec.args,
+            env: spec.env,
+        };
+        out(JSON.stringify({ "perplexity-web": snippet }, null, 2));
+        return 0;
+    }
+
     const clients = String(opts.client).split(",").map((c) => c.trim().toLowerCase()).filter(Boolean);
     const unknown = clients.filter((c) => !CLIENTS.includes(c));
     if (unknown.length > 0) {
@@ -312,7 +332,6 @@ async function runSetup(opts) {
     }
     const dryRun = Boolean(opts["dry-run"]);
     const mode = resolveMode(opts);
-    const spec = buildServerSpec({ mode, absoluteNode: Boolean(opts["absolute-node"]) });
     const home = resolveHome();
     const cwd = process.cwd();
     let failures = 0;
@@ -325,6 +344,7 @@ async function runSetup(opts) {
         failures++;
 
     for (const client of clients) {
+        const spec = buildServerSpec({ mode, absoluteNode: Boolean(opts["absolute-node"]), client });
         const target = clientTarget(client, { home, cwd, project: Boolean(opts.project) });
         out();
         out(`== ${target.label} ==`);

@@ -54,10 +54,10 @@ npx -y @aqsacloud/perplexity-web-mcp doctor --online
 
 1. **`search`**: Query Perplexity with claim-level `[1]`, `[2]` citation provenance, optional live citation verification (`verify_claims: true`), TTL caching, and automatic long-output disk spooling (`>= 15,000` chars).
 2. **`search_advanced`**: Filter sources across `web`, `academic`, or `social`.
-3. **`compare_models`**: Query 2–5 frontier models concurrently across browser profile pools or parallel API calls, returning agreed facts, divergent specifics, and shared citations.
+3. **`compare_models`**: Query 2–5 frontier models sequentially (or concurrently when multiple `PERPLEXITY_PROFILE_DIRS` browser profile pools or parallel API calls are configured), returning agreed facts, divergent specifics, and shared citations.
 4. **`list_models`**: Discover currently available frontier models on your Perplexity tier.
 5. **`set_default_model`**: Set a sticky default model (e.g. `GPT-6.1 Sol`, `Claude Sonnet 5.5`, `Best`).
-6. **`health_check`**: Verify browser launch, Cloudflare status, composer input, and write permissions in ~2 seconds (auto-capturing failure snapshots under `./diagnostics/` if unhealthy).
+6. **`health_check`**: Verify browser launch, Cloudflare status, composer input, and write permissions in ~2 seconds (auto-capturing failure snapshots under `~/.perplexity-web-mcp/diagnostics/` if unhealthy).
 7. **`login`**: Verify or trigger interactive authentication for a browser profile.
 
 ---
@@ -79,11 +79,9 @@ In `~/.config/opencode/opencode.json` (global) or `./opencode.json` (workspace):
         "command": [
           "npx",
           "-y",
-          "@aqsacloud/perplexity-web-mcp@latest"
+          "@aqsacloud/perplexity-web-mcp@^1.5"
         ],
-        "environment": {
-          "PERPLEXITY_HEADLESS": "false"
-        },
+        "environment": {},
         "timeout": {
           "startup": 60000,
           "execution": 960000
@@ -98,7 +96,7 @@ In `~/.config/opencode/opencode.json` (global) or `./opencode.json` (workspace):
 Add with the Claude CLI:
 
 ```bash
-claude mcp add perplexity-web -- npx -y @aqsacloud/perplexity-web-mcp@latest
+claude mcp add perplexity-web -- npx -y @aqsacloud/perplexity-web-mcp@^1.5
 ```
 
 Or in your project's `.mcp.json`:
@@ -109,10 +107,8 @@ Or in your project's `.mcp.json`:
     "perplexity-web": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@aqsacloud/perplexity-web-mcp@latest"],
-      "env": {
-        "PERPLEXITY_HEADLESS": "false"
-      }
+      "args": ["-y", "@aqsacloud/perplexity-web-mcp@^1.5"],
+      "env": {}
     }
   }
 }
@@ -127,10 +123,8 @@ In `~/.cursor/mcp.json` or `.cursor/mcp.json`:
     "perplexity-web": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@aqsacloud/perplexity-web-mcp@latest"],
-      "env": {
-        "PERPLEXITY_HEADLESS": "false"
-      }
+      "args": ["-y", "@aqsacloud/perplexity-web-mcp@^1.5"],
+      "env": {}
     }
   }
 }
@@ -144,13 +138,19 @@ In `~/.gemini/config/mcp_config.json`:
   "mcpServers": {
     "perplexity-web": {
       "command": "cmd.exe",
-      "args": ["/c", "npx", "-y", "@aqsacloud/perplexity-web-mcp@latest"],
-      "env": {
-        "PERPLEXITY_HEADLESS": "false"
-      }
+      "args": ["/c", "npx", "-y", "@aqsacloud/perplexity-web-mcp@^1.5"],
+      "env": {}
     }
   }
 }
+```
+
+### Other Clients (Codex, Gemini CLI, VS Code, Windsurf, Cline, Zed, Continue)
+
+Print a generic JSON snippet for any MCP-compatible client:
+
+```bash
+npx -y @aqsacloud/perplexity-web-mcp setup --print
 ```
 
 ---
@@ -188,6 +188,9 @@ export PERPLEXITY_API_KEY="pplx-xxxxxxxxxxxxxxxx"
 ```
 The server will automatically route queries to the official Perplexity Agent API (`/v1/agent`), providing sub-second latency with zero UI automation or Cloudflare involvement.
 
+### "Can I run OpenCode + Cursor + Claude Code at the same time?"
+When you use `setup --client <name>`, each client gets its own isolated browser profile directory (`~/.perplexity-web-mcp/profiles/<client>/`), so multiple clients can run simultaneously without Chromium lock conflicts. If you configured manually, set `PERPLEXITY_PROFILE_DIR` to a unique path per client.
+
 ---
 
 ## ⚙️ Environment Variables
@@ -195,13 +198,17 @@ The server will automatically route queries to the official Perplexity Agent API
 | Variable | Default | Description |
 | :--- | :--- | :--- |
 | `PERPLEXITY_DATA_DIR` | `~/.perplexity-web-mcp` | Directory for browser profiles, cache, and outputs when installed via npm/npx. |
+| `PERPLEXITY_PROFILE_DIR` | `~/.perplexity-web-mcp/.playwright/profile` | Browser profile directory. Setup generates a per-client path automatically. |
+| `PERPLEXITY_PROFILE_DIRS` | *(unset)* | Semicolon/comma-separated list of profile directories for concurrent browser pool slots. |
 | `PERPLEXITY_API_KEY` | *(unset)* | Enables official Perplexity REST API backend (`/v1/agent`). |
 | `PERPLEXITY_BACKEND` | `"auto"` | Execution backend (`"auto"`, `"browser"`, or `"api"`). |
-| `PERPLEXITY_OUTPUT_DIR` | `./outputs` | Directory where answers $\ge 15,000$ chars are spooled to `.txt`. |
+| `PERPLEXITY_HEADLESS` | `"true"` | Set to `"false"` to show the automation browser window (useful for debugging). |
+| `PERPLEXITY_OUTPUT_DIR` | `./outputs` | Directory where answers ≥ 15,000 chars are spooled to `.txt`. |
 | `PERPLEXITY_ALLOW_ABSOLUTE_OUTPUT` | `"0"` | Set to `"1"` to allow `output_file` to write outside the outputs directory. |
 | `PERPLEXITY_LOGIN_TIMEOUT_MS` | `900000` (15m) | Maximum wait time for interactive login. |
 | `PERPLEXITY_CACHE_TTL_SECONDS` | `3600` (1h) | TTL for repeated query caching (`0` disables). |
 | `PERPLEXITY_VERIFY_CLAIMS` | `"0"` | Set to `"1"` to enable claim verification by default. |
+| `PERPLEXITY_FORCE_CLEANUP` | `"0"` | Set to `"1"` to allow the server to kill orphaned Chrome processes that hold a profile lock. Without this, it only removes lock files. |
 
 ---
 

@@ -4,8 +4,11 @@ import { fileURLToPath } from "url";
 import { resolveExecutionBackend, runApiSearch } from "./api.js";
 import { checkSession } from "./auth.js";
 import { ensureBrowser, newSearchPage, runWithProfileSlot } from "./browser.js";
+import { buildCacheKey, getCachedResult, resolveCacheDir, resolveCacheTtlSeconds, setCachedResult } from "./cache.js";
+import { resolveDiagnosticsDir, saveDiagnosticSnapshot } from "./diagnostics.js";
 import { ErrorCode, PerplexityMcpError } from "./errors.js";
-import { writeCheckpoint, removeCheckpoint } from "./output.js";
+import { writeCheckpoint, removeCheckpoint, resolveOutputDir } from "./output.js";
+import { resolveVerifyDefault, verifyClaims } from "./verify.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = path.resolve(__dirname, "../config.json");
@@ -92,37 +95,77 @@ function resolveTargetUrl(threadUrl) {
     return parsed.toString();
 }
 
-export async function search(query, timeoutMs, model, threadUrl, runtimeOpts = {}) {
+async function executeSearchQuery(query, timeoutMs, sources, model, threadUrl, runtimeOpts = {}) {
     const selectedBackend = resolveExecutionBackend({ backend: runtimeOpts.backend, threadUrl });
-    log(`Search (${selectedBackend}): "${query}"${model ? ` model="${model}"` : ""}${runtimeOpts.profile ? ` profile="${runtimeOpts.profile}"` : ""}${threadUrl ? ` thread="${threadUrl}"` : ""} (timeout: ${timeoutMs}ms)`);
-    if (selectedBackend === "api") {
-        return runApiSearch(query, timeoutMs, {
-            model,
-            maxSources: resolveMaxSources(),
-            signal: runtimeOpts.signal,
-            onProgress: runtimeOpts.onProgress,
-        });
-    }
-    return runWithProfileSlot({ profile: runtimeOpts.profile, signal: runtimeOpts.signal }, (slot) =>
-        runSearch(slot, query, timeoutMs, null, model, threadUrl, runtimeOpts)
-    );
-}
+    const verifyClaimsOpt = typeof runtimeOpts.verifyClaims === "boolean"
+        ? runtimeOpts.verifyClaims
+        : resolveVerifyDefault();
+    const cacheTtlSeconds = resolveCacheTtlSeconds();
+    const allowCache = !threadUrl && !runtimeOpts.noCache && cacheTtlSeconds > 0;
+    const modelForKey = model?.trim() || (selectedBackend === "browser" ? getDefaultModel() || "(default)" : "");
+    const cacheKey = buildCacheKey({ backend: selectedBackend, model: modelForKey, sources, query });
+    const sourceTag = sources ? ` sources=[${sources.join(",")}]` : "";
 
-export async function searchWithSources(query, timeoutMs, sources, model, threadUrl, runtimeOpts = {}) {
-    const selectedBackend = resolveExecutionBackend({ backend: runtimeOpts.backend, threadUrl });
-    log(`Search (${selectedBackend}): "${query}" sources=[${sources.join(",")}]${model ? ` model="${model}"` : ""}${runtimeOpts.profile ? ` profile="${runtimeOpts.profile}"` : ""}${threadUrl ? ` thread="${threadUrl}"` : ""} (timeout: ${timeoutMs}ms)`);
-    if (selectedBackend === "api") {
-        return runApiSearch(query, timeoutMs, {
+    if (allowCache) {
+        const hit = getCachedResult(cacheKey, cacheTtlSeconds);
+        if (hit) {
+            log(`Cache hit (${selectedBackend}, age=${hit.ageSeconds}s): "${query.slice(0, 60)}"`);
+            let cachedResult = {
+                ...hit.result,
+                cached: true,
+                cacheAgeSeconds: hit.ageSeconds,
+                durationMs: 0,
+            };
+            if (verifyClaimsOpt && cachedResult.claims?.length > 0 && !cachedResult.verificationSummary) {
+                const verified = await verifyClaims(cachedResult.claims, {
+                    signal: runtimeOpts.signal,
+                    onProgress: runtimeOpts.onProgress,
+                });
+                cachedResult.claims = verified.claims;
+                cachedResult.verificationSummary = verified.summary;
+                setCachedResult(cacheKey, cachedResult, { ttlSeconds: cacheTtlSeconds });
+            }
+            return cachedResult;
+        }
+    }
+
+    log(`Search (${selectedBackend}): "${query}"${sourceTag}${model ? ` model="${model}"` : ""}${runtimeOpts.profile ? ` profile="${runtimeOpts.profile}"` : ""}${threadUrl ? ` thread="${threadUrl}"` : ""} (timeout: ${timeoutMs}ms)`);
+    let result = selectedBackend === "api"
+        ? await runApiSearch(query, timeoutMs, {
             model,
             sources,
             maxSources: resolveMaxSources(),
             signal: runtimeOpts.signal,
             onProgress: runtimeOpts.onProgress,
+        })
+        : await runWithProfileSlot({ profile: runtimeOpts.profile, signal: runtimeOpts.signal }, (slot) =>
+            runSearch(slot, query, timeoutMs, sources, model, threadUrl, runtimeOpts)
+        );
+
+    if (verifyClaimsOpt && result?.claims?.length > 0) {
+        const verified = await verifyClaims(result.claims, {
+            signal: runtimeOpts.signal,
+            onProgress: runtimeOpts.onProgress,
         });
+        result = {
+            ...result,
+            claims: verified.claims,
+            verificationSummary: verified.summary,
+        };
     }
-    return runWithProfileSlot({ profile: runtimeOpts.profile, signal: runtimeOpts.signal }, (slot) =>
-        runSearch(slot, query, timeoutMs, sources, model, threadUrl, runtimeOpts)
-    );
+
+    if (allowCache && result && !result.partial && !result.timedOut) {
+        setCachedResult(cacheKey, result, { ttlSeconds: cacheTtlSeconds });
+    }
+    return result;
+}
+
+export async function search(query, timeoutMs, model, threadUrl, runtimeOpts = {}) {
+    return executeSearchQuery(query, timeoutMs, null, model, threadUrl, runtimeOpts);
+}
+
+export async function searchWithSources(query, timeoutMs, sources, model, threadUrl, runtimeOpts = {}) {
+    return executeSearchQuery(query, timeoutMs, sources, model, threadUrl, runtimeOpts);
 }
 
 export function getDefaultModel() {
@@ -194,6 +237,137 @@ export async function listModels(runtimeOpts = {}) {
     });
 }
 
+/** Probe login, blocking interstitials, search composer, add button, and model menu on Perplexity. */
+export async function healthCheck({ profile, timeoutMs = 25_000, signal } = {}) {
+    const startedAt = Date.now();
+    return runWithProfileSlot({ profile, signal }, async (slot) => {
+        const checks = [];
+        let page = null;
+        let blockingState = null;
+        let models = [];
+        let currentModel = null;
+
+        try {
+            const tLaunch = Date.now();
+            await ensureBrowser({ slot });
+            page = await newSearchPage(slot);
+            checks.push({ name: "browser_launch", ok: true, ms: Date.now() - tLaunch });
+
+            throwIfAborted(signal, "health_nav", slot.id);
+            const tNav = Date.now();
+            await page.goto(PERPLEXITY_HOME, { waitUntil: "domcontentloaded", timeout: Math.min(timeoutMs, 15_000) });
+            await dismissDialogs(page);
+            checks.push({ name: "navigate", ok: true, ms: Date.now() - tNav, url: page.url() });
+
+            // Check Cloudflare / anti-bot blocking first
+            const probe = await page.evaluate(() => {
+                const title = (document.title ?? "").trim();
+                const bodyText = (document.body?.innerText ?? "").slice(0, 2000);
+                const hasCfFrame = Boolean(document.querySelector('iframe[src*="challenges.cloudflare.com"], #challenge-running, .cf-turnstile, [data-cf-challenge]'));
+                const isCfText = /just a moment|verify you are human|checking your browser|attention required/i.test(`${title}\n${bodyText}`);
+                return { title, hasCfFrame, isCfText };
+            }).catch(() => ({ title: "", hasCfFrame: false, isCfText: false }));
+            const blocked = probe.hasCfFrame || probe.isCfText;
+            if (blocked)
+                blockingState = probe.title || "Cloudflare challenge";
+            checks.push({ name: "cloudflare_clear", ok: !blocked, ...(blocked ? { detail: blockingState } : {}) });
+
+            // Check authentication
+            const tAuth = Date.now();
+            const authenticated = await checkSession(page);
+            checks.push({ name: "auth_session", ok: authenticated, ms: Date.now() - tAuth });
+
+            // Check composer search box
+            const tBox = Date.now();
+            const searchBoxOk = await page.locator(INPUT_SELECTOR).first().waitFor({ state: "visible", timeout: 8_000 }).then(() => true).catch(() => false);
+            checks.push({ name: "search_input", ok: searchBoxOk, ms: Date.now() - tBox });
+
+            // Check + / attachments button
+            const tAdd = Date.now();
+            const addBtnOk = await page.evaluate((inputSel) => {
+                const isVis = (el) => {
+                    const r = el.getBoundingClientRect();
+                    const cs = getComputedStyle(el);
+                    return r.width > 0 && r.height > 0 && cs.display !== "none" && cs.visibility !== "hidden" && parseFloat(cs.opacity || "1") > 0;
+                };
+                return Array.from(document.querySelectorAll("button")).some((b) => {
+                    if (!isVis(b) || b.closest('nav, aside, [class*="sidebar"]'))
+                        return false;
+                    const use = b.querySelector("use");
+                    const href = use?.getAttribute("xlink:href") ?? use?.getAttribute("href") ?? "";
+                    const label = `${b.getAttribute("aria-label") ?? ""} ${b.textContent ?? ""}`.trim();
+                    return href === "#pplx-icon-plus" || /add files|attach|plugins|connectors|\bmore\b/i.test(label);
+                });
+            }, INPUT_SELECTOR).catch(() => false);
+            checks.push({ name: "add_sources_button", ok: addBtnOk, ms: Date.now() - tAdd });
+
+            // Check model selector menu + hydration
+            const tMenu = Date.now();
+            let modelMenuOk = false;
+            let modelError = null;
+            if (searchBoxOk && !blocked) {
+                try {
+                    const res = await openHydratedModelMenu(page, slot.id);
+                    currentModel = res.currentModel;
+                    models = res.models.filter((m) => !m.disabled && !m.isMax).map((m) => m.name);
+                    await page.keyboard.press("Escape").catch(() => { });
+                    modelMenuOk = models.length > 0;
+                }
+                catch (err) {
+                    modelError = err instanceof Error ? err.message : String(err);
+                }
+            }
+            checks.push({ name: "model_menu", ok: modelMenuOk, ms: Date.now() - tMenu, count: models.length, ...(modelError ? { error: modelError } : {}) });
+
+            // Check writable local dirs (outputs, cache, diagnostics)
+            const writable = [resolveOutputDir(), resolveCacheDir(), resolveDiagnosticsDir()].every((d) => {
+                try {
+                    fs.mkdirSync(d, { recursive: true });
+                    return true;
+                }
+                catch {
+                    return false;
+                }
+            });
+            checks.push({ name: "local_dirs_writable", ok: writable });
+
+            let status = "healthy";
+            if (blocked || !searchBoxOk || !modelMenuOk)
+                status = "unhealthy";
+            else if (!authenticated)
+                status = "unauthenticated";
+            else if (!addBtnOk || !writable)
+                status = "degraded";
+
+            let snapshotFiles = null;
+            if (status === "unhealthy" || status === "degraded") {
+                snapshotFiles = await saveDiagnosticSnapshot(page, `health-${status}`, { profile: slot.id, checks });
+            }
+
+            return {
+                ok: status === "healthy",
+                status,
+                profile: slot.id,
+                authenticated,
+                currentModel,
+                defaultModel: getDefaultModel(),
+                modelCount: models.length,
+                models,
+                checks,
+                snapshotFiles,
+                durationMs: Date.now() - startedAt,
+            };
+        }
+        finally {
+            await page?.close().catch(() => { });
+        }
+    });
+}
+
+async function captureFailureSnapshot(page, label, extra = {}) {
+    return saveDiagnosticSnapshot(page, label, extra).catch(() => null);
+}
+
 /** Detect Cloudflare interstitials or unauthenticated login gates before treating failures as missing selectors. */
 async function detectPageBlockingState(page, profileId) {
     const probe = await page.evaluate(() => {
@@ -235,24 +409,31 @@ async function waitForComposer(page, profileId, timeoutMs, signal) {
     catch (err) {
         throwIfAborted(signal, "page_ready", profileId);
         await detectPageBlockingState(page, profileId);
+        const snapshotFiles = await captureFailureSnapshot(page, "missing-search-input", { profile: profileId, selector: INPUT_SELECTOR });
         throw new PerplexityMcpError(
             ErrorCode.SELECTOR_MISSING,
             `Search input box not visible on Perplexity (${INPUT_SELECTOR}): ${err instanceof Error ? err.message : String(err)}`,
-            { stage: "page_ready", profile: profileId, recoverable: true, details: { selector: INPUT_SELECTOR }, cause: err }
+            { stage: "page_ready", profile: profileId, recoverable: true, details: { selector: INPUT_SELECTOR, ...(snapshotFiles ? { snapshotFiles } : {}) }, cause: err }
         );
     }
 }
 
 async function getTurnCounts(page) {
     return page.evaluate(() => {
-        const proseCount = document.querySelectorAll("main .prose").length;
+        const prosePanels = Array.from(document.querySelectorAll("main .prose"));
+        for (const p of prosePanels) {
+            p.setAttribute("data-mcp-old-prose", "1");
+        }
+        const lastProse = prosePanels.length > 0 ? prosePanels[prosePanels.length - 1] : null;
+        const lastText = (lastProse?.textContent ?? "").trim();
+        const lastProseSig = lastText ? `${lastText.length}:${lastText.slice(0, 200)}:${lastText.slice(-80)}` : "";
         const doneBtnCount = Array.from(document.querySelectorAll("main button")).filter((b) => {
             const aria = (b.getAttribute("aria-label") ?? "").toLowerCase();
             const txt = (b.textContent ?? "").trim();
             const rect = b.getBoundingClientRect();
             return rect.width > 0 && rect.height > 0 && (aria === "fork" || /^finished\b/i.test(txt) || /\b\d+\s+sources?\b/i.test(txt));
         }).length;
-        return { proseCount, doneBtnCount };
+        return { proseCount: prosePanels.length, doneBtnCount, lastProseSig };
     });
 }
 
@@ -323,9 +504,11 @@ async function runSearch(slot, query, timeoutMs, sources, model, threadUrl, runt
         const searchBox = page.locator(INPUT_SELECTOR).first();
         await searchBox.waitFor({ state: "visible", timeout: 10_000 }).catch(async (err) => {
             await detectPageBlockingState(page, slot.id);
+            const snapshotFiles = await captureFailureSnapshot(page, "missing-composer-submit", { profile: slot.id });
             throw new PerplexityMcpError(ErrorCode.SELECTOR_MISSING, `Composer box disappeared before typing query: ${err instanceof Error ? err.message : String(err)}`, {
                 stage: "submitting",
                 profile: slot.id,
+                ...(snapshotFiles ? { details: { snapshotFiles } } : {}),
                 cause: err,
             });
         });
@@ -368,6 +551,8 @@ async function runSearch(slot, query, timeoutMs, sources, model, threadUrl, runt
 
         const maxSources = resolveMaxSources();
         const extracted = await extractAnswerAndProvenance(page, maxSources);
+        const renderedTurnCount = await page.evaluate(() => document.querySelectorAll("main .prose").length).catch(() => null);
+        const virtualizedThread = Boolean(threadUrl && initialCounts.proseCount >= 2 && renderedTurnCount !== null && renderedTurnCount <= initialCounts.proseCount);
         const enrichedSources = await enrichCitationCards(page, extracted.sources, {
             signal,
             minProse: initialCounts.proseCount,
@@ -394,6 +579,8 @@ async function runSearch(slot, query, timeoutMs, sources, model, threadUrl, runt
             backend: "browser",
             profile: slot.id,
             modelUsed: modelUsed || null,
+            turnCount: renderedTurnCount ?? undefined,
+            virtualizedThread,
             partial: waitOutcome.timedOut,
             timedOut: waitOutcome.timedOut,
             durationMs,
@@ -454,9 +641,11 @@ async function selectSources(page, sources, profileId) {
     }, INPUT_SELECTOR);
 
     if (!foundAdd) {
+        const snapshotFiles = await captureFailureSnapshot(page, "missing-add-button", { profile: profileId });
         throw new PerplexityMcpError(ErrorCode.SELECTOR_MISSING, "Could not find the + (add) button on Perplexity", {
             stage: "selecting_sources",
             profile: profileId,
+            ...(snapshotFiles ? { details: { snapshotFiles } } : {}),
         });
     }
 
@@ -546,13 +735,14 @@ async function selectSources(page, sources, profileId) {
 
     if (!connProbe.ok) {
         if (connProbe.directBoxes === 0) {
+            const snapshotFiles = await captureFailureSnapshot(page, "missing-connectors-menu", { profile: profileId, seen: connProbe.seen });
             throw new PerplexityMcpError(
                 ErrorCode.SELECTOR_MISSING,
                 `Could not find Sources/Connectors menuitem after clicking "${foundAdd}"`,
                 {
                     stage: "selecting_sources",
                     profile: profileId,
-                    details: { expanded: connProbe.expanded, ctrlId: connProbe.ctrlId, seen: connProbe.seen },
+                    details: { expanded: connProbe.expanded, ctrlId: connProbe.ctrlId, seen: connProbe.seen, ...(snapshotFiles ? { snapshotFiles } : {}) },
                 }
             );
         }
@@ -681,9 +871,11 @@ async function openModelMenu(page, profileId) {
     }
     if (!found) {
         await detectPageBlockingState(page, profileId);
+        const snapshotFiles = await captureFailureSnapshot(page, "missing-model-button", { profile: profileId });
         throw new PerplexityMcpError(ErrorCode.SELECTOR_MISSING, "Could not find the Model selector button on Perplexity.", {
             stage: "selecting_model",
             profile: profileId,
+            ...(snapshotFiles ? { details: { snapshotFiles } } : {}),
         });
     }
     let trigger = page.locator('button[data-mcp-model-btn="true"]').first();
@@ -697,7 +889,8 @@ async function openModelMenu(page, profileId) {
             trigger = page.locator('button[data-mcp-model-btn="true"]').first();
             await safeClick(trigger, 5_000);
         }
-        const currentModel = (await trigger.innerText().catch(() => "")).trim() || (await trigger.getAttribute("aria-label").catch(() => "")) || "Model";
+        const rawCurrent = (await trigger.innerText().catch(() => "")).trim() || (await trigger.getAttribute("aria-label").catch(() => "")) || "Model";
+        const currentModel = rawCurrent.split(/\r?\n/).map((s) => s.trim()).filter((s) => s && !/^model$/i.test(s))[0] || rawCurrent;
         const controlsId = await trigger.getAttribute("aria-controls").catch(() => null);
         const menuLocator = controlsId
             ? page.locator(`[id="${controlsId}"]`)
@@ -706,10 +899,11 @@ async function openModelMenu(page, profileId) {
         return { currentModel, menuLocator };
     }
     catch (err) {
+        const snapshotFiles = await captureFailureSnapshot(page, "model-menu-open-failed", { profile: profileId });
         throw new PerplexityMcpError(
             ErrorCode.SELECTOR_MISSING,
             `Failed opening Model selector menu on profile "${profileId}": ${err instanceof Error ? err.message : String(err)}`,
-            { stage: "selecting_model", profile: profileId, cause: err }
+            { stage: "selecting_model", profile: profileId, ...(snapshotFiles ? { details: { snapshotFiles } } : {}), cause: err }
         );
     }
 }
@@ -883,7 +1077,7 @@ async function savePartialCheckpointSafe(page, fallbackText, opts, existingPath,
     return { savedPath, partialChars: (answerText || "").length, threadUrl: threadUrl || null };
 }
 
-async function waitForAnswerComplete(page, timeoutMs, initialCounts = { proseCount: 0, doneBtnCount: 0 }, hooks = {}) {
+async function waitForAnswerComplete(page, timeoutMs, initialCounts = { proseCount: 0, doneBtnCount: 0, lastProseSig: "" }, hooks = {}) {
     const { signal, profileId = "default", query = "", model = "", onProgress, onCheckpointCreated } = hooks;
     const startedAt = Date.now();
     const deadline = startedAt + timeoutMs;
@@ -893,6 +1087,7 @@ async function waitForAnswerComplete(page, timeoutMs, initialCounts = { proseCou
     let lastCheckpointAt = startedAt;
     let lastCheckpointRaw = "";
     let checkpointPath = null;
+    let sawStopBtn = false;
 
     const recordCheckpoint = (p) => {
         checkpointPath = p;
@@ -924,21 +1119,41 @@ async function waitForAnswerComplete(page, timeoutMs, initialCounts = { proseCou
             );
         }
 
-        const state = await page.evaluate((minProse) => {
-            const prosePanels = document.querySelectorAll("main .prose");
+        const state = await page.evaluate((baseline) => {
+            const prosePanels = Array.from(document.querySelectorAll("main .prose"));
             let panel = null;
-            if (prosePanels.length > minProse) {
+            if (prosePanels.length > baseline.proseCount) {
                 panel = prosePanels[prosePanels.length - 1];
             }
-            else if (minProse === 0 && prosePanels.length === 0) {
+            else if (prosePanels.length > 0) {
+                // On virtualized long threads Perplexity unmounts older turns while rendering new ones,
+                // so proseCount can stay flat (e.g. 2 -> 2). Detect freshly mounted or changed tail panels.
+                const fresh = prosePanels.filter((p) => !p.hasAttribute("data-mcp-old-prose"));
+                const candidate = fresh.length > 0 ? fresh[fresh.length - 1] : prosePanels[prosePanels.length - 1];
+                const candText = (candidate?.textContent ?? "").trim();
+                const candSig = candText ? `${candText.length}:${candText.slice(0, 200)}:${candText.slice(-80)}` : "";
+                if (!baseline.lastProseSig || (candText.length > 0 && candSig !== baseline.lastProseSig)) {
+                    panel = candidate;
+                }
+            }
+            else if (baseline.proseCount === 0) {
                 panel = document.querySelector('[role="tabpanel"]');
             }
             const text = (panel?.textContent ?? "").trim();
             const btns = Array.from(document.querySelectorAll("main button"));
             const hasStopBtn = btns.some((b) => {
-                const aria = (b.getAttribute("aria-label") ?? "").toLowerCase();
+                const rect = b.getBoundingClientRect();
+                if (rect.width === 0 || rect.height === 0)
+                    return false;
+                const cs = getComputedStyle(b);
+                if (cs.display === "none" || cs.visibility === "hidden" || parseFloat(cs.opacity || "1") === 0)
+                    return false;
+                const aria = (b.getAttribute("aria-label") ?? "").trim().toLowerCase();
                 const txt = (b.textContent ?? "").trim().toLowerCase();
-                return aria.includes("stop") || txt === "stop";
+                return /\bstop\s*(?:generating|streaming|response|task|search)\b/.test(aria)
+                    || aria === "stop"
+                    || txt === "stop"
+                    || txt === "stop generating";
             });
             const doneBtnCount = btns.filter((b) => {
                 const aria = (b.getAttribute("aria-label") ?? "").toLowerCase();
@@ -948,9 +1163,28 @@ async function waitForAnswerComplete(page, timeoutMs, initialCounts = { proseCou
                     return false;
                 return aria === "fork" || /^finished\b/i.test(txt) || /\b\d+\s+sources?\b/i.test(txt);
             }).length;
-            return { text, hasStopBtn, doneBtnCount };
-        }, initialCounts.proseCount).catch(() => ({ text: lastText, hasStopBtn: false, doneBtnCount: initialCounts.doneBtnCount }));
+            const mainTxt = !text ? (document.querySelector("main")?.innerText ?? "") : "";
+            const creditBlocked = !text && /you need more credits to continue|add credits to your account/i.test(mainTxt);
+            return { text, hasStopBtn, doneBtnCount, creditBlocked };
+        }, initialCounts).catch(() => ({ text: lastText, hasStopBtn: false, doneBtnCount: initialCounts.doneBtnCount, creditBlocked: false }));
 
+        if (state.creditBlocked && !lastText) {
+            const snapshotFiles = await captureFailureSnapshot(page, "credits-required", { profile: profileId, query: query.slice(0, 120) });
+            const threadUrl = await getThreadUrlFromPage(page).catch(() => null);
+            throw new PerplexityMcpError(
+                ErrorCode.MODEL_UNAVAILABLE,
+                "Perplexity task requires additional account credits ('You need more credits to continue'). Switch models or top up credits in Perplexity.",
+                {
+                    stage: "streaming",
+                    profile: profileId,
+                    recoverable: true,
+                    threadUrl: threadUrl ?? undefined,
+                    ...(snapshotFiles ? { details: { snapshotFiles } } : {}),
+                }
+            );
+        }
+        if (state.hasStopBtn)
+            sawStopBtn = true;
         if (state.text !== lastText) {
             lastText = state.text;
             lastChangedAt = Date.now();
@@ -958,12 +1192,15 @@ async function waitForAnswerComplete(page, timeoutMs, initialCounts = { proseCou
         const now = Date.now();
         const idleMs = now - lastChangedAt;
         if (state.text.length > 0 && !state.hasStopBtn) {
-            if (state.doneBtnCount > initialCounts.doneBtnCount && idleMs >= 600) {
+            if ((state.doneBtnCount > initialCounts.doneBtnCount || sawStopBtn) && idleMs >= 600) {
                 return { timedOut: false, checkpointPath };
             }
             if (idleMs >= 1500) {
                 return { timedOut: false, checkpointPath };
             }
+        }
+        if (state.text.length > 0 && state.doneBtnCount > initialCounts.doneBtnCount && idleMs >= 3000) {
+            return { timedOut: false, checkpointPath };
         }
 
         if (now - lastProgressAt >= PROGRESS_INTERVAL_MS) {
@@ -997,11 +1234,13 @@ async function waitForAnswerComplete(page, timeoutMs, initialCounts = { proseCou
 
     if (!lastText) {
         await detectPageBlockingState(page, profileId);
+        const snapshotFiles = await captureFailureSnapshot(page, "answer-timeout", { profile: profileId, query: query.slice(0, 120) });
         const threadUrl = await getThreadUrlFromPage(page).catch(() => null);
         throw new PerplexityMcpError(ErrorCode.TIMEOUT, `Timed out after ${timeoutMs}ms waiting for Perplexity answer`, {
             stage: "streaming",
             profile: profileId,
             threadUrl: threadUrl ?? undefined,
+            ...(snapshotFiles ? { details: { snapshotFiles } } : {}),
         });
     }
     log("Timeout reached with partial answer; returning accumulated text.");

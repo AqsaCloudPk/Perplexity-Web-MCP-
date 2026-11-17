@@ -44,10 +44,18 @@ export function resolveExecutionBackend({ backend = "auto", threadUrl = "", env 
 /** Extract claim-to-citation mapping from markdown/plain text containing [1], [2] style markers. */
 export function extractClaimsFromCitedText(text, sources = []) {
     const byIndex = new Map(sources.map((s, idx) => [s.index ?? idx + 1, s]));
-    const lines = String(text ?? "")
-        .split(/\r?\n/)
-        .map((l) => l.trim())
-        .filter((l) => l && !/^#{1,4}\s/.test(l) && !/^```/.test(l) && !/^\|[-\s|]+\|$/.test(l));
+    const lines = [];
+    let inCodeFence = false;
+    for (const rawLine of String(text ?? "").split(/\r?\n/)) {
+        const l = rawLine.trim();
+        if (/^```/.test(l)) {
+            inCodeFence = !inCodeFence;
+            continue;
+        }
+        if (inCodeFence || !l || /^#{1,4}\s/.test(l) || /^\|[-\s|]+\|$/.test(l))
+            continue;
+        lines.push(l);
+    }
 
     const claims = [];
     for (const line of lines) {

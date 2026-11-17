@@ -100,16 +100,27 @@ function formatSourcesBlock(sources, includeSnippets = true) {
     }).join("\n");
 }
 
-function formatClaimsBlock(claims) {
+function formatClaimsBlock(claims, verificationSummary = null) {
     if (!claims || claims.length === 0)
         return "";
-    return "\n\nClaim Provenance:\n" + claims.map((c) => {
+    const durationNote = typeof verificationSummary?.durationMs === "number" ? `, ${verificationSummary.durationMs}ms` : "";
+    const summaryLine = verificationSummary
+        ? `Verification: supported=${verificationSummary.supported}, weak=${verificationSummary.weak}, unverified=${verificationSummary.unverified} (pages=${verificationSummary.pagesLoaded}/${verificationSummary.pagesChecked}${durationNote})\n`
+        : "";
+    const lines = claims.map((c) => {
         const refs = (c.citations ?? []).map((n) => `[${n}]`).join("");
         const urlList = (c.urls ?? []).join(", ");
         const cleanText = String(c.text ?? "").replace(/\s+/g, " ").trim();
         const trimmed = cleanText.length > 260 ? `${cleanText.slice(0, 260)}...` : cleanText;
-        return `- ${trimmed}${refs ? ` -> ${refs}` : ""}${urlList ? ` (${urlList})` : ""}`;
+        let verifyTag = "";
+        if (c.verification?.status) {
+            const v = c.verification;
+            const detail = v.missingFacts?.length ? ` missing=[${v.missingFacts.join(", ")}]` : "";
+            verifyTag = ` [${v.status}${v.reason && v.status !== "supported" ? `:${v.reason}` : ""}${detail}]`;
+        }
+        return `- ${trimmed}${refs ? ` -> ${refs}` : ""}${verifyTag}${urlList ? ` (${urlList})` : ""}`;
     }).join("\n");
+    return `\n\nClaim Provenance:\n${summaryLine}${lines}`;
 }
 
 function formatAttachmentsBlock(attachments) {
@@ -186,7 +197,7 @@ export function removeCheckpoint(checkpointPath) {
     if (!checkpointPath)
         return;
     try {
-        fs.rmSync(checkpointPath, { force: true });
+        fs.rmSync(checkpointPath, { force: true, maxRetries: 5, retryDelay: 50 });
     }
     catch {
         // Ignore cleanup failure
@@ -219,10 +230,44 @@ export function buildResultMetadata(result, { model = "", outputFile = null, spo
         durationMs: typeof result?.durationMs === "number" ? result.durationMs : null,
         threadUrl: result?.threadUrl || null,
     };
-    if (result?.usage) {
-        meta.usage = result.usage;
+    if (typeof result?.turnCount === "number")
+        meta.turnCount = result.turnCount;
+    if (result?.virtualizedThread)
+        meta.virtualizedThread = true;
+    if (result?.cached) {
+        meta.cached = true;
+        meta.cacheAgeSeconds = result.cacheAgeSeconds ?? 0;
     }
+    if (result?.verificationSummary)
+        meta.verification = result.verificationSummary;
+    if (result?.usage)
+        meta.usage = result.usage;
     return meta;
+}
+
+/** Spool any document text to a UTF-8 .txt file with safe pruning & fallback handling. */
+export function writeTextOutputFile({ fullDocument, query = "", outputFile = "", env = process.env } = {}) {
+    const outputDir = resolveOutputDir(env);
+    const explicitFile = Boolean(outputFile && String(outputFile).trim());
+    const targetPath = resolveTargetFilePath(outputFile, query, outputDir);
+    try {
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+        fs.writeFileSync(targetPath, fullDocument, "utf8");
+        if (!explicitFile) {
+            pruneOldOutputs(outputDir);
+        }
+        return { ok: true, targetPath, explicitFile };
+    }
+    catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[perplexity-web-mcp] Failed saving output file "${targetPath}": ${message}`);
+        return { ok: false, targetPath, explicitFile, error: message };
+    }
+}
+
+/** Build a truncated inline preview for any text body when spooled to file. */
+export function buildTextPreview(text, maxChars = PREVIEW_CHARS) {
+    return buildPreview(text, maxChars);
 }
 
 /**
@@ -235,26 +280,29 @@ export function formatResult(result, options = {}) {
 
     const { query = "", model = "", outputFile = "", env = process.env } = options;
     const sourcesText = formatSourcesBlock(result.sources);
-    const claimsText = formatClaimsBlock(result.claims);
+    const claimsText = formatClaimsBlock(result.claims, result.verificationSummary);
     const attachmentsText = formatAttachmentsBlock(result.attachments);
     const threadText = formatThreadLine(result.threadUrl);
     const threshold = resolveLongOutputThreshold(env);
     const explicitFile = Boolean(outputFile && String(outputFile).trim());
     const exceedsThreshold = threshold > 0 && result.answer.length >= threshold;
-    const partialNotice = result.partial
-        ? "[Partial answer: timeout reached before generation finished; returning accumulated text]\n\n"
-        : "";
+    const notices = [];
+    if (result.cached) {
+        notices.push(`[Cached result (${result.cacheAgeSeconds ?? 0}s old); pass no_cache=true to force fresh query]`);
+    }
+    if (result.partial) {
+        notices.push("[Partial answer: timeout reached before generation finished; returning accumulated text]");
+    }
+    const prefixNotice = notices.length > 0 ? `${notices.join("\n")}\n\n` : "";
 
     if (!explicitFile && !exceedsThreshold) {
         const inlineClaimsText = (result.claims?.length ?? 0) > 0 && (result.claims?.length ?? 0) <= 12
             ? claimsText
             : "";
         const meta = buildResultMetadata(result, { model, spooled: false });
-        return `${partialNotice}${result.answer}${inlineClaimsText}${attachmentsText}${sourcesText}${threadText}\n\nMetadata: ${JSON.stringify(meta)}`;
+        return `${prefixNotice}${result.answer}${inlineClaimsText}${attachmentsText}${sourcesText}${threadText}\n\nMetadata: ${JSON.stringify(meta)}`;
     }
 
-    const outputDir = resolveOutputDir(env);
-    const targetPath = resolveTargetFilePath(outputFile, query, outputDir);
     const fullDocument = buildFileDocument(result, {
         query,
         model,
@@ -263,20 +311,12 @@ export function formatResult(result, options = {}) {
         claimsText,
         attachmentsText,
     });
+    const writeRes = writeTextOutputFile({ fullDocument, query, outputFile, env });
 
-    try {
-        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-        fs.writeFileSync(targetPath, fullDocument, "utf8");
-        if (!explicitFile) {
-            pruneOldOutputs(outputDir);
-        }
-    }
-    catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.error(`[perplexity-web-mcp] Failed saving output file "${targetPath}": ${message}`);
+    if (!writeRes.ok) {
         const meta = buildResultMetadata(result, { model, spooled: false });
-        return `[Warning: could not save output file "${targetPath}" (${message}); returning inline]\n\n`
-            + `${partialNotice}${result.answer}${attachmentsText}${sourcesText}${threadText}\n\nMetadata: ${JSON.stringify(meta)}`;
+        return `[Warning: could not save output file "${writeRes.targetPath}" (${writeRes.error}); returning inline]\n\n`
+            + `${prefixNotice}${result.answer}${attachmentsText}${sourcesText}${threadText}\n\nMetadata: ${JSON.stringify(meta)}`;
     }
 
     const answerLines = result.answer.split(/\r?\n/).length;
@@ -285,15 +325,16 @@ export function formatResult(result, options = {}) {
     const headerNotice = explicitFile
         ? (result.partial ? "[Partial output saved to file]" : "[Output saved to file]")
         : `[Long output saved to file for token efficiency (>= ${threshold} chars)]`;
-    const meta = buildResultMetadata(result, { model, outputFile: targetPath, spooled: true });
+    const meta = buildResultMetadata(result, { model, outputFile: writeRes.targetPath, spooled: true });
 
     return [
+        ...(notices.length > 0 ? notices : []),
         headerNotice,
-        `File: ${targetPath}`,
+        `File: ${writeRes.targetPath}`,
         `Answer size: ${result.answer.length} chars (${answerLines} lines); total file: ${totalFileLines} lines`,
         "Read the full response and Claim Provenance section in slices with your file-reading tool.",
         "",
         "Preview:",
-        preview + (truncated ? `\n[... truncated; read full output at ${targetPath}]` : ""),
+        preview + (truncated ? `\n[... truncated; read full output at ${writeRes.targetPath}]` : ""),
     ].join("\n") + `${attachmentsText}${sourcesText}${threadText}\n\nMetadata: ${JSON.stringify(meta)}`;
 }

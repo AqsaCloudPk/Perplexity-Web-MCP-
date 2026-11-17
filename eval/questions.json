@@ -1,0 +1,146 @@
+[
+  {
+    "id": "coding-01",
+    "category": "coding",
+    "query": "In Node.js 22, show how AbortSignal.any() combines a caller signal and AbortSignal.timeout() safely in fetch(), and name one common leak pitfall.",
+    "minChars": 150,
+    "minSources": 1,
+    "expectedTokens": ["AbortSignal", "timeout"]
+  },
+  {
+    "id": "coding-02",
+    "category": "coding",
+    "query": "Explain why PostgreSQL advisory locks or SELECT FOR UPDATE SKIP LOCKED prevent duplicate job execution in multi-worker queues, with a short SQL example.",
+    "minChars": 150,
+    "minSources": 1,
+    "expectedTokens": ["SKIP LOCKED", "SELECT"]
+  },
+  {
+    "id": "coding-03",
+    "category": "coding",
+    "query": "In TypeScript, when does the `satisfies` operator preserve narrower literal types better than an explicit type annotation `: Type`?",
+    "minChars": 150,
+    "minSources": 1,
+    "expectedTokens": ["satisfies", "type"]
+  },
+  {
+    "id": "coding-04",
+    "category": "coding",
+    "query": "Why must HMAC webhook signature comparisons in Node.js use crypto.timingSafeEqual() after hashing, and what happens if buffer lengths differ?",
+    "minChars": 150,
+    "minSources": 1,
+    "expectedTokens": ["timingSafeEqual", "length"]
+  },
+  {
+    "id": "coding-05",
+    "category": "coding",
+    "query": "Explain stream backpressure in Node.js `node:stream/promises` pipeline() and why ignoring writable.write() returning false causes memory bloat.",
+    "minChars": 150,
+    "minSources": 1,
+    "expectedTokens": ["pipeline", "false"]
+  },
+  {
+    "id": "coding-06",
+    "category": "coding",
+    "query": "What is the SSRF risk of following HTTP redirects naively in backend fetch/axios clients even after validating the initial URL hostname?",
+    "minChars": 150,
+    "minSources": 1,
+    "expectedTokens": ["redirect", "SSRF"]
+  },
+  {
+    "id": "docs-01",
+    "category": "documentation",
+    "query": "According to official MDN and WHATWG specifications, how does Server-Sent Events (EventSource) handle automatic reconnection and HTTP 204 responses?",
+    "minChars": 150,
+    "minSources": 1,
+    "expectedTokens": ["204", "EventSource"]
+  },
+  {
+    "id": "docs-02",
+    "category": "documentation",
+    "query": "According to Model Context Protocol (MCP) specification, what is the role of notifications/cancelled and notifications/progress on long-running tool calls?",
+    "minChars": 150,
+    "minSources": 1,
+    "expectedTokens": ["cancelled", "progress"]
+  },
+  {
+    "id": "docs-03",
+    "category": "documentation",
+    "query": "According to official Playwright documentation, what does page.waitForLoadState('domcontentloaded') wait for compared to 'load' and 'networkidle'?",
+    "minChars": 150,
+    "minSources": 1,
+    "expectedTokens": ["domcontentloaded", "load"]
+  },
+  {
+    "id": "docs-04",
+    "category": "documentation",
+    "query": "According to official Redis documentation, how does SET key value NX EX seconds behave atomically for distributed locks?",
+    "minChars": 150,
+    "minSources": 1,
+    "expectedTokens": ["NX", "EX"]
+  },
+  {
+    "id": "docs-05",
+    "category": "documentation",
+    "query": "According to HTTP RFC 9110 / MDN, what makes GET, PUT, and DELETE idempotent while POST is generally not, and what HTTP status code suits 429 Retry-After?",
+    "minChars": 150,
+    "minSources": 1,
+    "expectedTokens": ["idempotent", "Retry-After"]
+  },
+  {
+    "id": "docs-06",
+    "category": "documentation",
+    "query": "According to SQLite WAL mode documentation, why can readers proceed concurrently with a single writer, and what file suffixes does WAL create?",
+    "minChars": 150,
+    "minSources": 1,
+    "expectedTokens": ["WAL", "-shm"]
+  },
+  {
+    "id": "current-01",
+    "category": "current",
+    "query": "State the official initial release date and Active LTS date of Node.js 22 ('Jod') citing official nodejs.org pages.",
+    "minChars": 100,
+    "minSources": 1,
+    "expectedTokens": ["April 24, 2024", "2024"]
+  },
+  {
+    "id": "current-02",
+    "category": "current",
+    "query": "State the initial release date and scheduled end-of-life date of Node.js 20 ('Iron') citing official nodejs.org release schedules.",
+    "minChars": 100,
+    "minSources": 1,
+    "expectedTokens": ["2023", "2026"]
+  },
+  {
+    "id": "current-03",
+    "category": "current",
+    "query": "What were the headline features introduced in Python 3.13 official release (free-threaded CPython experimental mode and JIT) and its release month/year?",
+    "minChars": 120,
+    "minSources": 1,
+    "expectedTokens": ["3.13", "2024"]
+  },
+  {
+    "id": "current-04",
+    "category": "current",
+    "query": "Summarize the latest stable ECMAScript (ES2024/ES2025) Array/Promise additions such as Promise.withResolvers or Set methods citing official specs or MDN.",
+    "minChars": 120,
+    "minSources": 1,
+    "expectedTokens": ["withResolvers", "Promise"]
+  },
+  {
+    "id": "current-05",
+    "category": "current",
+    "query": "What changed when Perplexity AI deprecated legacy /chat/completions in favor of /v1/agent and /orchestrator/v1/chat/completions?",
+    "minChars": 120,
+    "minSources": 1,
+    "expectedTokens": ["agent", "orchestrator"]
+  },
+  {
+    "id": "current-06",
+    "category": "current",
+    "query": "What are the key differences between Playwright's Chromium headless shell and full Chromium browser binary introduced in recent Playwright versions?",
+    "minChars": 120,
+    "minSources": 1,
+    "expectedTokens": ["chromium", "headless"]
+  }
+]

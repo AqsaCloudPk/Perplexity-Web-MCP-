@@ -4,9 +4,12 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { ensureAuthenticated } from "./auth.js";
 import { closeBrowser, ensurePoolInitialized, getPoolStatus } from "./browser.js";
+import { resolveCacheTtlSeconds } from "./cache.js";
+import { compareModels, DEFAULT_COMPARE_MODELS, formatComparison } from "./compare.js";
 import { normalizeError } from "./errors.js";
 import { formatResult } from "./output.js";
-import { search, searchWithSources, listModels, setDefaultModel, DEFAULT_TIMEOUT_MS } from "./search.js";
+import { search, searchWithSources, listModels, setDefaultModel, healthCheck, DEFAULT_TIMEOUT_MS } from "./search.js";
+import { resolveVerifyDefault } from "./verify.js";
 
 // --- CLI args ---
 const args = process.argv.slice(2);
@@ -40,6 +43,16 @@ const backendSchema = z
     .enum(["auto", "browser", "api"])
     .optional()
     .describe("Execution backend: 'auto' (uses official Perplexity Agent API if PERPLEXITY_API_KEY is configured and thread_url is omitted, otherwise browser Pro session), 'browser' (Playwright Pro UI), or 'api' (official HTTPS Agent API).");
+
+const verifyClaimsSchema = z
+    .boolean()
+    .optional()
+    .describe("If true (or PERPLEXITY_VERIFY_CLAIMS=1), fetches cited pages and checks key facts (numbers, dates, versions, names) for each claim, marking supported / weak / unverified.");
+
+const noCacheSchema = z
+    .boolean()
+    .optional()
+    .describe("If true, bypasses the local response cache (default TTL 3600s, configurable via PERPLEXITY_CACHE_TTL_SECONDS) and forces a fresh search.");
 
 function createProgressReporter(extra) {
     const progressToken = extra?._meta?.progressToken;
@@ -84,7 +97,7 @@ ensurePoolInitialized();
 
 const server = new McpServer({
     name: "perplexity-web",
-    version: "1.3.0",
+    version: "1.4.0",
 });
 
 server.registerTool(
@@ -147,7 +160,7 @@ server.registerTool(
 server.registerTool(
     "search",
     {
-        description: "Search the web using Perplexity.ai with claim-level citation provenance ([1] markers, snippets, dates), cancellation-safe streaming, progress notifications, partial .txt checkpoints, typed error JSON, poolable browser profiles, and optional official Agent API backend (PERPLEXITY_API_KEY). Supports model, thread_url, timeout_seconds (default 900s / max 1800s), profile, backend, and output_file / auto .txt spooling (>= 15000 chars).",
+        description: "Search the web using Perplexity.ai with claim-level citation provenance ([1] markers, snippets, dates), optional live claim-source verification (supported/weak/unverified), local caching, cancellation-safe streaming, progress notifications, partial .txt checkpoints, typed error JSON, poolable browser profiles, and optional official Agent API backend. Supports model, thread_url, timeout_seconds (default 900s / max 1800s), profile, backend, verify_claims, no_cache, and output_file / auto .txt spooling (>= 15000 chars).",
         inputSchema: {
             query: z.string().describe("The search query or follow-up question"),
             model: z
@@ -162,13 +175,17 @@ server.registerTool(
             output_file: outputFileSchema,
             profile: profileSchema,
             backend: backendSchema,
+            verify_claims: verifyClaimsSchema,
+            no_cache: noCacheSchema,
         },
     },
-    wrapTool("search", async ({ query, model, thread_url, timeout_seconds, output_file, profile, backend }, extra) => {
+    wrapTool("search", async ({ query, model, thread_url, timeout_seconds, output_file, profile, backend, verify_claims, no_cache }, extra) => {
         const result = await search(query, resolveTimeoutMs(timeout_seconds), model, thread_url, {
             profile,
             backend,
             outputFile: output_file,
+            verifyClaims: verify_claims,
+            noCache: no_cache,
             signal: extra?.signal,
             onProgress: createProgressReporter(extra),
         });
@@ -179,7 +196,7 @@ server.registerTool(
 server.registerTool(
     "search_advanced",
     {
-        description: "Search Perplexity.ai with specific source selection (web, academic, social), claim-level citation provenance ([1] markers, snippets, dates), cancellation-safe streaming, progress notifications, partial .txt checkpoints, typed error JSON, poolable browser profiles, and optional official Agent API backend. Supports model, thread_url, timeout_seconds (default 900s / max 1800s), profile, backend, and output_file / auto .txt spooling (>= 15000 chars).",
+        description: "Search Perplexity.ai with specific source selection (web, academic, social), claim-level citation provenance ([1] markers, snippets, dates), optional live claim-source verification, local caching, cancellation-safe streaming, progress notifications, partial .txt checkpoints, typed error JSON, poolable browser profiles, and optional official Agent API backend.",
         inputSchema: {
             query: z.string().describe("The search query"),
             sources: z
@@ -198,17 +215,87 @@ server.registerTool(
             output_file: outputFileSchema,
             profile: profileSchema,
             backend: backendSchema,
+            verify_claims: verifyClaimsSchema,
+            no_cache: noCacheSchema,
         },
     },
-    wrapTool("search_advanced", async ({ query, sources, model, thread_url, timeout_seconds, output_file, profile, backend }, extra) => {
+    wrapTool("search_advanced", async ({ query, sources, model, thread_url, timeout_seconds, output_file, profile, backend, verify_claims, no_cache }, extra) => {
         const result = await searchWithSources(query, resolveTimeoutMs(timeout_seconds), sources, model, thread_url, {
             profile,
             backend,
             outputFile: output_file,
+            verifyClaims: verify_claims,
+            noCache: no_cache,
             signal: extra?.signal,
             onProgress: createProgressReporter(extra),
         });
         return textResult(formatResult(result, { query, model, outputFile: output_file }));
+    })
+);
+
+server.registerTool(
+    "compare_models",
+    {
+        description: "Ask one question across 2–5 Perplexity models (running concurrently when multiple PERPLEXITY_PROFILE_DIRS profiles or backend='api' are configured), compare shared citations and agreed/divergent key facts, and return a consolidated Markdown report (spooled to .txt if >= 15000 chars or output_file is set).",
+        inputSchema: {
+            query: z.string().describe("Question or architecture/code comparison prompt to send to each model"),
+            models: z
+                .array(z.string())
+                .min(2)
+                .max(5)
+                .optional()
+                .describe(`Optional list of 2-5 Perplexity models (defaults to ${DEFAULT_COMPARE_MODELS.join(", ")}).`),
+            sources: z
+                .array(z.enum(["web", "academic", "social"]))
+                .min(1)
+                .optional()
+                .describe("Optional source filter applied to every model in the comparison."),
+            timeout_seconds: timeoutSecondsSchema,
+            output_file: outputFileSchema,
+            backend: backendSchema,
+            verify_claims: verifyClaimsSchema,
+            no_cache: noCacheSchema,
+        },
+    },
+    wrapTool("compare_models", async ({ query, models, sources, timeout_seconds, output_file, backend, verify_claims, no_cache }, extra) => {
+        const comparison = await compareModels({
+            query,
+            models,
+            sources,
+            timeoutMs: resolveTimeoutMs(timeout_seconds),
+            backend,
+            verifyClaims: verify_claims,
+            noCache: no_cache,
+            signal: extra?.signal,
+            onProgress: createProgressReporter(extra),
+        });
+        return textResult(formatComparison(comparison, { outputFile: output_file }));
+    })
+);
+
+server.registerTool(
+    "health_check",
+    {
+        description: "Quick (~5s) diagnostic check verifying Perplexity authentication, absence of Cloudflare blocks, composer search input, add/sources trigger, model selector hydration, and writable local directories. Saves a diagnostic HTML+PNG snapshot automatically if any check fails.",
+        inputSchema: {
+            profile: profileSchema,
+        },
+    },
+    wrapTool("health_check", async ({ profile }, extra) => {
+        const report = await healthCheck({ profile, signal: extra?.signal });
+        const checkLines = report.checks.map((c) => `- ${c.name}: ${c.ok ? "OK" : "FAIL"}${typeof c.ms === "number" ? ` (${c.ms}ms)` : ""}${c.detail ? ` — ${c.detail}` : ""}${c.error ? ` — ${c.error}` : ""}`);
+        const text = [
+            `Health status: ${report.status.toUpperCase()} (profile="${report.profile}", ${report.durationMs}ms)`,
+            `Authenticated: ${report.authenticated}`,
+            `Models available: ${report.modelCount}${report.defaultModel ? ` (saved default: ${report.defaultModel})` : ""}`,
+            "",
+            "Checks:",
+            ...checkLines,
+            ...(report.snapshotFiles ? ["", `Diagnostic snapshot saved: ${JSON.stringify(report.snapshotFiles)}`] : []),
+            "",
+            `Metadata: ${JSON.stringify(report)}`,
+        ].join("\n");
+        return textResult(text);
     })
 );
 
@@ -248,7 +335,7 @@ process.stdin.on("end", () => void shutdown(0));
 // --- Startup ---
 async function main() {
     const pool = getPoolStatus();
-    console.error(`[perplexity-web-mcp] Starting v1.3.0 (timeout=${TIMEOUT_MS}ms, pool=${pool.map((p) => p.id).join(",")}, apiKey=${process.env.PERPLEXITY_API_KEY ? "configured" : "unset"})...`);
+    console.error(`[perplexity-web-mcp] Starting v1.4.0 (timeout=${TIMEOUT_MS}ms, cacheTtl=${resolveCacheTtlSeconds()}s, verifyDefault=${resolveVerifyDefault()}, pool=${pool.map((p) => p.id).join(",")}, apiKey=${process.env.PERPLEXITY_API_KEY ? "configured" : "unset"})...`);
     console.error("[perplexity-web-mcp] Ready. Browser will launch on first tool call.");
     const transport = new StdioServerTransport();
     await server.connect(transport);

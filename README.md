@@ -2,13 +2,18 @@
 
 Portable MCP stdio server + `perplexity-orchestrator` skill bundle for connecting AI coding agents (**Claude Code**, **Cursor**, **OpenCode**, **Antigravity**, and other MCP clients) to your Perplexity web session via Playwright.
 
-> **Privacy & Sharing Notice**: This bundle is sanitized — it contains **no** `.playwright/` session cookies, **no** `config.json`, and **no** user-specific file paths. `.gitignore` excludes `node_modules/`, `.playwright/`, and `config.json` so it can be shared safely as a Git repo or zip archive.
+> **Privacy & Sharing Notice**: This bundle is sanitized — it contains **no** `.playwright/` session cookies, **no** `config.json`, **no** cached/diagnostic/output dumps, and **no** user-specific file paths. `.gitignore` excludes `node_modules/`, `.playwright/`, `cache/`, `diagnostics/`, `outputs/`, `eval-results/`, and `config.json` so it can be shared safely as a Git repo or zip archive.
 
 ---
 
 ## Included Features
 
-- **5 MCP Tools**: `list_models`, `set_default_model`, `search`, `search_advanced`, and `login`.
+- **7 MCP Tools**: `list_models`, `set_default_model`, `search`, `search_advanced`, `compare_models`, `health_check`, and `login`.
+- **Claim-to-Source Verification (`verify_claims`)**: Pass `verify_claims: true` (or set `PERPLEXITY_VERIFY_CLAIMS=1`) to fetch cited pages, match dates/versions/numbers/names, and tag each claim `supported`, `weak`, or `unverified`.
+- **Multi-Model Comparison (`compare_models`)**: Fan out one prompt across `2–5` models concurrently using `PERPLEXITY_PROFILE_DIRS` browser pool slots (or parallel official API calls) and summarize agreed facts, divergent specifics, and shared citations.
+- **UI Health Check & Failure Snapshots (`health_check`)**: Verify login, Cloudflare clear state, search input, `+`/sources trigger, hydrated model selector, and local dirs in seconds, auto-saving `.html`/`.png`/`.json` debug snapshots under `./diagnostics/` when Perplexity selectors break.
+- **Query Result Cache (`no_cache`)**: Replays repeated non-thread queries within `3600s` (`PERPLEXITY_CACHE_TTL_SECONDS`, `0` disables) instantly from `./cache/`.
+- **Virtualized Long-Thread Follow-Ups**: Correctly detects new follow-up turns even when Perplexity virtualizes old DOM `.prose` nodes (`turnCount` & `virtualizedThread` reported in `Metadata`).
 - **15-Minute Default Timeout (`900s`)**: Long reasoning prompts and Pro models get `900s` by default, configurable per request via `timeout_seconds` (up to `1800s` / 30 min) or globally via `--timeout=<seconds>`.
 - **Non-Intrusive Minimized Browser**: Launches headed Chromium off-screen and minimizes it so interactive browsing stays out of your way while avoiding headless bot blocks.
 - **Clean Lifecycle Management**: Cleans up stale Chromium profile locks on startup and shuts down cleanly on `stdin` close, `SIGINT`, `SIGTERM`, and `SIGHUP`.
@@ -16,10 +21,10 @@ Portable MCP stdio server + `perplexity-orchestrator` skill bundle for connectin
 - **Claim-Level Citation Provenance**: Preserves inline `[1]`, `[2]` citation references inside answers (`data-pplx-citation-url` pills + anchor tags), maps claims to cited URLs (`Claim Provenance` section in `.txt` / compact answers), and hovers top citation cards (`<=1.8s` budget) to recover page titles, snippets, dates, and multi-source links.
 - **Optional Official Agent API Hybrid (`PERPLEXITY_API_KEY`)**: Pass `backend: "api"` (or set `PERPLEXITY_API_KEY` with `backend: "auto"`) to call Perplexity's official `/v1/agent` endpoint directly (`1–5s` latency, official `search_results` snippets/dates, zero UI scraping/ToS exposure) while keeping Playwright Pro browser mode as the zero-extra-cost default.
 - **Structured Typed Errors & Metadata JSON**: Returns typed JSON error payloads (`LOGIN_REQUIRED`, `CLOUDFLARE_CHALLENGE`, `SELECTOR_MISSING`, `MODEL_UNAVAILABLE`, `CANCELLED`, `TIMEOUT`, `INVALID_PARAMS`, `PROFILE_UNAVAILABLE`, `API_ERROR`), extracts up to `50` sources by default (`PERPLEXITY_MAX_SOURCES`) plus downloadable attachment links, and appends a compact `Metadata` JSON line.
-- **Poolable Concurrent Browser Profiles**: Supports `PERPLEXITY_PROFILE_DIRS` (semicolon/comma-separated profile directories) and per-call `profile` arguments (`list_models`, `search`, `search_advanced`, `login`) with independent per-profile browser contexts and queues so multiple agents/calls can run in parallel.
+- **Poolable Concurrent Browser Profiles**: Supports `PERPLEXITY_PROFILE_DIRS` (semicolon/comma-separated profile directories) and per-call `profile` arguments (`list_models`, `search`, `search_advanced`, `compare_models`, `health_check`, `login`) with independent per-profile browser contexts and queues so multiple agents/calls can run in parallel.
 - **Long-Output `.txt` File Spooling**: Answers at or above `15000` chars (or any query passed with `output_file`) automatically save to a UTF-8 `.txt` file (`./outputs/` by default) and return a compact preview, counts, sources, and `Thread URL` so coding agents can read large results in slices instead of overflowing context.
 - **Portable Profile Path**: Defaults to `./.playwright/profile` inside this directory, or accepts `PERPLEXITY_PROFILE_DIR` to point each agent or workspace to a specific profile folder.
-- **Cross-Agent Skill**: Includes `skills/perplexity-orchestrator/SKILL.md` implementing the **Discover -> Research -> Iterate (`thread_url`) -> Compare -> Test -> Adopt** workflow.
+- **Cross-Agent Skill + Test/Eval Suite (`npm test`, `npm run eval`)**: Includes `skills/perplexity-orchestrator/SKILL.md` implementing the **Discover -> Research -> Iterate (`thread_url`) -> Compare -> Test -> Adopt** workflow, `node --test` unit/DOM/protocol tests, and an 18-question live evaluation runner.
 
 ---
 
@@ -28,13 +33,23 @@ Portable MCP stdio server + `perplexity-orchestrator` skill bundle for connectin
 ```text
 perplexity-web-orchestrator/
 ├── dist/
-│   ├── index.js       # MCP SDK stdio entry point (progress, cancellation, typed errors)
-│   ├── browser.js     # Poolable Playwright profile manager, off-screen/minimized handling, cleanup
-│   ├── auth.js        # Cancellation-safe session check & interactive login flow
-│   ├── search.js      # Model/source selection, claim provenance, hover cards & streaming
-│   ├── api.js         # Optional Perplexity official /v1/agent REST backend
-│   ├── output.js      # Long-output .txt spooling, Claim Provenance, checkpoints, metadata
-│   └── errors.js      # Typed PerplexityMcpError codes and normalization
+│   ├── index.js        # MCP SDK stdio entry point (7 tools, progress, cancellation, typed errors)
+│   ├── browser.js      # Poolable Playwright profile manager, off-screen/minimized handling, cleanup
+│   ├── auth.js         # Cancellation-safe session check & interactive login flow
+│   ├── search.js       # Model/source selection, virtualized-thread detection, health_check, provenance
+│   ├── compare.js      # compare_models multi-model fan-out & consensus analysis
+│   ├── facts.js        # Key-fact extractor (dates, versions, numbers+units, names)
+│   ├── verify.js       # Claim-to-source HTTP verification (supported / weak / unverified)
+│   ├── cache.js        # File-backed TTL query cache
+│   ├── diagnostics.js  # Failure .html/.png/.json snapshot saver
+│   ├── api.js          # Optional Perplexity official /v1/agent REST backend
+│   ├── output.js       # Long-output .txt spooling, Claim Provenance, checkpoints, metadata
+│   └── errors.js       # Typed PerplexityMcpError codes and normalization
+├── eval/
+│   ├── questions.json  # 18 fixed benchmark prompts (coding, documentation, current events)
+│   └── run-eval.js     # Benchmark runner (`npm run eval`)
+├── test/
+│   └── *.test.js       # Unit, DOM, and stdio MCP integration suite (`npm test`)
 ├── configs/
 │   ├── claude-code.mcp.json
 │   ├── cursor.mcp.json
@@ -43,6 +58,7 @@ perplexity-web-orchestrator/
 ├── skills/
 │   └── perplexity-orchestrator/
 │       └── SKILL.md
+├── CHANGELOG.md
 ├── .gitignore
 ├── LICENSE            # MIT (upstream quequiere/perplexity-web-mcp)
 ├── package.json
@@ -117,6 +133,20 @@ Replace `G:/perplexity-web-orchestrator` below if you cloned or moved this folde
 | `PERPLEXITY_API_MODEL` | `"sonar"` | Default model ID when using `backend: "api"`. |
 | `PERPLEXITY_API_EFFORT` | `"medium"` | Effort level (`fast`, `low`, `medium`, `high`, `xhigh`) for the `/v1/agent` endpoint. |
 | `PERPLEXITY_BACKEND` | `"auto"` | Default backend policy (`auto`, `browser`, or `api`). |
+| `PERPLEXITY_VERIFY_CLAIMS` | `"false"` | Set `"1"` / `"true"` to verify claims against cited pages by default (or pass per-call `verify_claims`). |
+| `PERPLEXITY_CACHE_TTL_SECONDS` | `3600` | TTL in seconds for repeated non-thread queries (`0` disables caching; pass `no_cache: true` per call). |
+| `PERPLEXITY_CACHE_DIR` | `./cache` | Directory storing cached JSON search responses. |
+| `PERPLEXITY_DIAGNOSTICS_DIR` | `./diagnostics` | Directory storing failure `.html`/`.png`/`.json` snapshots (`max 30` groups). |
+
+---
+
+## Testing & Evaluation
+
+```bash
+npm run check          # Syntax-check all 12 runtime modules + eval script
+npm test               # Run offline unit, headless DOM, and stdio MCP protocol tests
+npm run eval           # Run the 18-question live evaluation benchmark (flags: --limit=N, --category=coding|documentation|current, --model=..., --backend=..., --verify, --timeout=120, --dry-check)
+```
 
 ---
 
